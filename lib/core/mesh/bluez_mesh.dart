@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 
 import 'package:bluez/bluez.dart';
 import 'package:dbus/dbus.dart';
@@ -38,7 +39,17 @@ class BluezMeshAdapter implements MeshAdapter {
   bool _advertising = false;
   bool _advDirty = false;
   String? _error;
-  final _seenPeers = <int>{};
+
+  /// Peers seen in the last few minutes (id -> last seen epoch). Pruned each
+  /// idle window so the HUD count is live, not a lifetime accumulator.
+  final Map<int, int> _peers = {};
+  final _rand = Random();
+
+  /// Per-cycle jitter breaks phase-lock between radios running near-equal duty
+  /// cycles: two devices that drift into "both scanning / both asleep" never
+  /// hear each other until luck separates them.
+  Duration _jittered(Duration base) =>
+      base + Duration(milliseconds: _rand.nextInt(900));
 
   @override
   String get name => 'BLUEZ';
@@ -54,7 +65,7 @@ class BluezMeshAdapter implements MeshAdapter {
     return [
       _scanOn ? 'SCANNING' : 'SCAN IDLE',
       _advertising ? 'ADV' : 'ADV OFF',
-      if (_seenPeers.isNotEmpty) '${_seenPeers.length} peer(s)',
+      if (_peers.isNotEmpty) '${_peers.length} peer(s)',
     ].join(' · ');
   }
 
@@ -108,11 +119,12 @@ class BluezMeshAdapter implements MeshAdapter {
       _error = 'discovery: $e';
       debugPrint('AapadSetu: bluez discovery failed: $e');
     }
-    _dutyCycleTimer = Timer(_scanWindowDuration, _sleepWindow);
+    _dutyCycleTimer = Timer(_jittered(_scanWindowDuration), _sleepWindow);
   }
 
   Future<void> _sleepWindow() async {
     _scanOn = false;
+    _prunePeers();
     try {
       await _adapter!.stopDiscovery();
     } catch (_) {
@@ -121,7 +133,12 @@ class BluezMeshAdapter implements MeshAdapter {
     // Radio is idle now: a good moment to (re)register the advertisement if
     // a broadcast was deferred during a scan window.
     await _retryAdvertising();
-    _dutyCycleTimer = Timer(_sleepWindowDuration, _scanWindow);
+    _dutyCycleTimer = Timer(_jittered(_sleepWindowDuration), _scanWindow);
+  }
+
+  void _prunePeers() {
+    final cutoff = DateTime.now().millisecondsSinceEpoch - 180000;
+    _peers.removeWhere((_, lastSeen) => lastSeen < cutoff);
   }
 
   void _handleDevice(BlueZDevice device) {
@@ -137,12 +154,7 @@ class BluezMeshAdapter implements MeshAdapter {
     if (data == null || data.isEmpty) return;
     try {
       final packet = MeshPacket.decode(Uint8List.fromList(data));
-      if (_seenPeers.add(packet.senderId)) {
-        debugPrint(
-          'AapadSetu: peer ${packet.senderId} seen via bluez '
-          '(rssi ${device.rssi})',
-        );
-      }
+      _peers[packet.senderId] = DateTime.now().millisecondsSinceEpoch;
       _rx.add(MeshRxPacket(packet: packet, rssi: device.rssi));
     } on FormatException {
       // Foreign or corrupt frame; ignore.

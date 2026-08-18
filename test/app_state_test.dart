@@ -4,6 +4,7 @@ import 'package:aapadsetu/core/app_state.dart';
 import 'package:aapadsetu/core/ledger/ledger_store.dart';
 import 'package:aapadsetu/core/master_key.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'fake_mesh_adapter.dart';
 
@@ -14,6 +15,8 @@ AppState makeState() {
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  setUp(() => SharedPreferences.setMockInitialValues({}));
 
   test('officer enlistment activates officer role offline', () async {
     final app = makeState();
@@ -75,5 +78,21 @@ void main() {
     app.switchRole(Role.citizen);
     expect(app.role, Role.citizen);
     app.dispose();
+  });
+
+  test('citizen identity persists across restarts (stable peer id)', () async {
+    final first = makeState();
+    await first.init();
+    final id1 = first.citizenId;
+    final node1 = first.mesh.nodeId;
+    first.dispose();
+
+    // Re-open the app: same persisted identity, so peers never see a new
+    // node id for the same phone.
+    final second = makeState();
+    await second.init();
+    expect(second.citizenId, id1);
+    expect(second.mesh.nodeId, node1);
+    second.dispose();
   });
 }

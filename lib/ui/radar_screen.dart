@@ -1,6 +1,7 @@
-/// Responder locator: AirTag-style radar for a live SOS target. When both
-/// devices carry GPS you get a true bearing + range; with no own GPS fix the
-/// screen degrades to an RSSI range estimate and says direction needs GPS.
+/// Responder locator: AirTag-style view of a live SOS target. With GPS on
+/// both devices you get a real bearing + range; without a fix the screen
+/// degrades to an RSSI range estimate and says clearly *which* side lacks
+/// GPS, since direction needs both ends fixed.
 library;
 
 import 'dart:async';
@@ -27,9 +28,9 @@ class RadarScreen extends StatefulWidget {
 
 class _RadarScreenState extends State<RadarScreen>
     with SingleTickerProviderStateMixin {
-  late final AnimationController _spin = AnimationController(
+  late final AnimationController _pulse = AnimationController(
     vsync: this,
-    duration: const Duration(seconds: 3),
+    duration: const Duration(milliseconds: 1600),
   )..repeat();
 
   StreamSubscription<CompassEvent>? _compassSub;
@@ -53,7 +54,7 @@ class _RadarScreenState extends State<RadarScreen>
   @override
   void dispose() {
     _compassSub?.cancel();
-    _spin.dispose();
+    _pulse.dispose();
     super.dispose();
   }
 
@@ -69,25 +70,26 @@ class _RadarScreenState extends State<RadarScreen>
         if (node == null) {
           return _targetLost(p);
         }
-        final target = _TrackTarget(mesh: mesh, node: node);
+        final t = _TrackTarget(mesh: mesh, node: node);
         return Scaffold(
           backgroundColor: p.bg,
           body: SafeArea(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                _header(p, mesh, node, target),
+                _header(p, node, t),
                 Expanded(
                   child: _RadarDial(
-                    spin: _spin,
+                    pulse: _pulse,
                     palette: p,
-                    bearingDeg: target.bearingDeg,
-                    distanceM: target.distanceM,
-                    hasGps: target.hasGps,
+                    bearingDeg: t.bearingDeg,
+                    distanceM: t.distanceM,
+                    hasBearing: t.hasBearing,
                     heading: _heading,
                   ),
                 ),
-                _readouts(p, node, target, _heading),
+                _readouts(p, t),
+                _hint(p, t),
                 _actions(p, app, mesh, node),
               ],
             ),
@@ -107,10 +109,9 @@ class _RadarScreenState extends State<RadarScreen>
     ),
   );
 
-  Widget _header(AppPalette p, MeshController mesh, MeshNodeState node,
-      _TrackTarget target) {
+  Widget _header(AppPalette p, MeshNodeState node, _TrackTarget t) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(8, 4, 8, 0),
+      padding: const EdgeInsets.fromLTRB(8, 4, 12, 0),
       child: Row(
         children: [
           IconButton(
@@ -118,19 +119,32 @@ class _RadarScreenState extends State<RadarScreen>
             color: p.textDim,
             onPressed: () => Navigator.of(context).pop(),
           ),
-          Text(
-            'TRACK NODE ${node.nodeId.toRadixString(16).toUpperCase()}',
-            style: TextStyle(
-              color: p.primary,
-              fontFamily: 'monospace',
-              fontWeight: FontWeight.bold,
-              letterSpacing: 1,
-            ),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'TRACK NODE ${node.nodeId.toRadixString(16).toUpperCase()}',
+                style: TextStyle(
+                  color: p.primary,
+                  fontFamily: 'monospace',
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 1,
+                ),
+              ),
+              Text(
+                'TRIAGE ${node.severity} · ${_rssiLabel(t)}',
+                style: TextStyle(
+                  color: p.textDim,
+                  fontFamily: 'monospace',
+                  fontSize: 11,
+                ),
+              ),
+            ],
           ),
           const Spacer(),
-          _RespondToggle(
+          _RespondButton(
             active: _responding,
-            onChanged: (v) => setState(() => _responding = v),
+            onPressed: () => setState(() => _responding = !_responding),
             palette: p,
           ),
         ],
@@ -138,50 +152,51 @@ class _RadarScreenState extends State<RadarScreen>
     );
   }
 
-  Widget _readouts(
-      AppPalette p, MeshNodeState node, _TrackTarget target, double? heading) {
-    final alt = target.altDeltaM;
+  String _rssiLabel(_TrackTarget t) => 'RSSI ${t.node.rssi} dBm';
+
+  Widget _readouts(AppPalette p, _TrackTarget t) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 24),
       child: Column(
         children: [
           Text(
-            target.distanceLabel,
+            t.distanceLabel,
             style: TextStyle(
               color: p.primary,
               fontFamily: 'monospace',
-              fontSize: 42,
+              fontSize: 44,
               fontWeight: FontWeight.bold,
               letterSpacing: 1,
             ),
           ),
           const SizedBox(height: 4),
           Text(
-            target.hasGps
-                ? 'BEARING ${target.bearingDeg!.round().toString().padLeft(3, '0')}° '
-                    '${_cardinal(target.bearingDeg!)}'
-                : 'DIRECTION NEEDS GPS ON THIS DEVICE',
+            _directionText(t),
             style: TextStyle(
-              color: target.hasGps ? p.text : p.error,
+              color: t.hasBearing ? p.text : p.error,
               fontFamily: 'monospace',
               fontSize: 14,
             ),
           ),
-          const SizedBox(height: 6),
+          const SizedBox(height: 8),
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              _chip(p, 'RSSI ${node.rssi} dBm'),
-              _chip(p, 'HOP ${node.hopCount}'),
-              if (alt != null)
-                _chip(p, 'ALT ${alt.abs()} m ${alt < 0 ? 'BELOW' : 'ABOVE'}'),
+              _chip(p, 'RSSI ${t.node.rssi} dBm'),
+              _chip(p, 'HOP ${t.node.hopCount}'),
+              if (t.altDeltaM != null)
+                _chip(
+                  p,
+                  'ALT ${t.altDeltaM!.abs().round()} m '
+                  '${t.altDeltaM! < 0 ? 'BELOW' : 'ABOVE'}',
+                ),
             ],
           ),
-          if (heading != null)
+          if (_heading != null)
             Padding(
               padding: const EdgeInsets.only(top: 4),
               child: Text(
-                'HEADING ${heading.round().toString().padLeft(3, '0')}°',
+                'HEADING ${_heading!.round().toString().padLeft(3, '0')}°',
                 style: TextStyle(
                   color: p.textDim,
                   fontFamily: 'monospace',
@@ -189,22 +204,19 @@ class _RadarScreenState extends State<RadarScreen>
                 ),
               ),
             ),
-          if (_responding)
-            Padding(
-              padding: const EdgeInsets.only(top: 6),
-              child: Text(
-                'RESPONDING — SOS KEEPS BROADCASTING TO OTHERS',
-                style: TextStyle(
-                  color: p.error,
-                  fontFamily: 'monospace',
-                  fontSize: 11,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ),
         ],
       ),
     );
+  }
+
+  /// Says which side is missing a fix instead of blaming this device.
+  String _directionText(_TrackTarget t) {
+    if (t.hasBearing) {
+      return 'BEARING ${t.bearingDeg!.round().toString().padLeft(3, '0')}° '
+          '${_cardinal(t.bearingDeg!)}';
+    }
+    if (!t.hasOwnGps) return 'YOUR DEVICE HAS NO GPS FIX';
+    return 'TARGET HAS NO GPS FIX — RANGE ESTIMATE ONLY';
   }
 
   Widget _chip(AppPalette p, String label) => Container(
@@ -224,13 +236,48 @@ class _RadarScreenState extends State<RadarScreen>
         ),
       );
 
+  Widget _hint(AppPalette p, _TrackTarget t) {
+    final turn = t.turnDeg(_heading);
+    if (turn == null) return const SizedBox.shrink();
+    final straight = turn.abs() < 8;
+    return Padding(
+      padding: const EdgeInsets.only(top: 12),
+      child: Text(
+        straight
+            ? 'STRAIGHT ON'
+            : 'TURN ${turn.abs().round()}° ${turn < 0 ? 'LEFT' : 'RIGHT'}',
+        style: TextStyle(
+          color: p.secondary,
+          fontFamily: 'monospace',
+          fontSize: 18,
+          fontWeight: FontWeight.bold,
+          letterSpacing: 1,
+        ),
+      ),
+    );
+  }
+
   Widget _actions(AppPalette p, AppState app, MeshController mesh,
       MeshNodeState node) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(24, 16, 24, 16),
-      child: Row(
+      child: Column(
         children: [
-          Expanded(
+          if (_responding)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: Text(
+                'RESPONDING — SOS KEEPS BROADCASTING TO OTHERS',
+                style: TextStyle(
+                  color: p.error,
+                  fontFamily: 'monospace',
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          SizedBox(
+            width: double.infinity,
             child: OutlinedButton.icon(
               onPressed: () {
                 app.openSos(widget.nodeId.toRadixString(16));
@@ -258,15 +305,15 @@ class _TrackTarget {
   final MeshController mesh;
   final MeshNodeState node;
 
-  bool get _ownGps => mesh.gpsFix;
+  bool get hasOwnGps => mesh.gpsFix;
   bool get _targetGps => MeshController.validCoord(node.latitude, node.longitude);
 
-  bool get hasGps => _ownGps && _targetGps;
+  bool get hasBearing => hasOwnGps && _targetGps;
 
   /// Bearing degrees clockwise from north (own → target), or null without
   /// both fixes.
   double? get bearingDeg {
-    if (!hasGps) return null;
+    if (!hasBearing) return null;
     final aLat = mesh.gpsLatitude!;
     final aLon = mesh.gpsLongitude!;
     final dLon = (node.longitude - aLon) * pi / 180;
@@ -278,10 +325,20 @@ class _TrackTarget {
     return (atan2(y, x) * 180 / pi + 360) % 360;
   }
 
-  /// Range: haversine/equal-lat when both fixes exist (a few metres apart is
-  /// noise, so below 5 m we trust the radio), otherwise an RSSI estimate.
+  /// Bearing relative to where the device currently faces. Null without both
+  /// the compass and a computed bearing.
+  double? turnDeg(double? heading) {
+    final b = bearingDeg;
+    if (b == null || heading == null) return null;
+    var rel = (b - heading) % 360;
+    if (rel > 180) rel -= 360;
+    return rel;
+  }
+
+  /// Range: equal-lat distance when both fixes exist (under 5 m it's noise,
+  /// so the radio estimate wins), otherwise an RSSI estimate.
   double? get distanceM {
-    if (hasGps) {
+    if (hasBearing) {
       final gpsD = MeshController.kmBetween(
             mesh.gpsLatitude!,
             mesh.gpsLongitude!,
@@ -306,7 +363,7 @@ class _TrackTarget {
 
   /// How far vertically the target sits vs this device (m).
   double? get altDeltaM {
-    if (!_ownGps || node.altitudeM == null) return null;
+    if (!hasOwnGps || node.altitudeM == null) return null;
     return node.altitudeM! - (mesh.gpsAltitude ?? 0);
   }
 }
@@ -316,36 +373,37 @@ String _cardinal(double deg) {
   return dirs[((deg + 22.5) % 360) ~/ 45];
 }
 
-/// Pulsing radar dial: concentric rings, rotating sweep, target blip at
-/// (bearing − heading) so "up" always points where you face.
+/// Find-My style dial: concentric rings with cardinal labels, you at the
+/// centre, and the target at (bearing − heading) so "up" is where you face.
+/// No rotating sweep — just a breathing pulse so the screen reads at a glance.
 class _RadarDial extends StatelessWidget {
   const _RadarDial({
-    required this.spin,
+    required this.pulse,
     required this.palette,
     required this.bearingDeg,
     required this.distanceM,
-    required this.hasGps,
+    required this.hasBearing,
     required this.heading,
   });
 
-  final AnimationController spin;
+  final AnimationController pulse;
   final AppPalette palette;
   final double? bearingDeg;
   final double? distanceM;
-  final bool hasGps;
+  final bool hasBearing;
   final double? heading;
 
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
-      animation: spin,
+      animation: pulse,
       builder: (context, _) => CustomPaint(
         painter: _RadarPainter(
-          progress: spin.value,
+          progress: pulse.value,
           palette: palette,
           bearingDeg: bearingDeg,
           distanceM: distanceM,
-          hasGps: hasGps,
+          hasBearing: hasBearing,
           heading: heading,
         ),
         size: Size.infinite,
@@ -360,7 +418,7 @@ class _RadarPainter extends CustomPainter {
     required this.palette,
     required this.bearingDeg,
     required this.distanceM,
-    required this.hasGps,
+    required this.hasBearing,
     required this.heading,
   });
 
@@ -368,17 +426,17 @@ class _RadarPainter extends CustomPainter {
   final AppPalette palette;
   final double? bearingDeg;
   final double? distanceM;
-  final bool hasGps;
+  final bool hasBearing;
   final double? heading;
 
   @override
   void paint(Canvas canvas, Size size) {
     final cx = size.width / 2;
     final cy = size.height / 2;
-    final radius = min(size.width, size.height) / 2 - 24;
+    final radius = min(size.width, size.height) / 2 - 30;
     final center = Offset(cx, cy);
 
-    // Concentric rings.
+    // Concentric rings with cardinal labels (north = up when heading known).
     for (var i = 1; i <= 3; i++) {
       canvas.drawCircle(
         center,
@@ -388,62 +446,84 @@ class _RadarPainter extends CustomPainter {
           ..style = PaintingStyle.stroke,
       );
     }
-
-    // Rotating sweep line.
-    final sweepAngle = progress * 2 * pi;
-    canvas.save();
-    canvas.translate(cx, cy);
-    canvas.rotate(sweepAngle);
-    canvas.drawArc(
-      Rect.fromCircle(center: Offset.zero, radius: radius),
-      0,
-      pi / 3,
-      true,
-      Paint()..color = palette.primary.withValues(alpha: 0.12),
+    final tp = TextPainter(
+      textDirection: TextDirection.ltr,
     );
-    canvas.drawLine(
-      Offset.zero,
-      Offset(0, -radius),
-      Paint()..color = palette.primary.withValues(alpha: 0.5),
-    );
-    canvas.restore();
-
-    if (!hasGps) {
-      canvas.drawCircle(
-        center,
-        6,
-        Paint()..color = palette.secondary,
+    for (final (label, angle) in const [
+      ('N', 0.0),
+      ('E', pi / 2),
+      ('S', pi),
+      ('W', 3 * pi / 2),
+    ]) {
+      tp.text = TextSpan(
+        text: label,
+        style: TextStyle(color: palette.textDim, fontSize: 11),
       );
-      return;
+      tp.layout();
+      tp.paint(
+        canvas,
+        center +
+            Offset(
+              (radius + 14) * sin(angle),
+              -(radius + 14) * cos(angle),
+            ) -
+            Offset(tp.width / 2, tp.height / 2),
+      );
+    }
+
+    // Heading triangle: points up so "top of dial = where you face".
+    if (heading != null) {
+      final path = Path()
+        ..moveTo(cx - 8, cy - radius - 20)
+        ..lineTo(cx + 8, cy - radius - 20)
+        ..lineTo(cx, cy - radius - 32)
+        ..close();
+      canvas.drawPath(path, Paint()..color = palette.primary);
     }
 
     // You at the centre.
     canvas.drawCircle(center, 6, Paint()..color = palette.secondary);
     canvas.drawCircle(
       center,
-      10,
+      11,
       Paint()
         ..color = palette.secondary
         ..style = PaintingStyle.stroke,
     );
 
+    if (!hasBearing) {
+      // No direction possible: show a fixed blip so the dial doesn't lie.
+      canvas.drawCircle(
+        center + Offset(0, -radius * 0.5),
+        7,
+        Paint()..color = palette.error,
+      );
+      return;
+    }
+
     // Target blip: bearing relative to heading (0 = north-up).
-    final bearing = bearingDeg!;
-    final h = heading ?? 0;
-    final angle = (bearing - h) * pi / 180;
+    final angle = (bearingDeg! - (heading ?? 0)) * pi / 180;
     final d = distanceM ?? 0;
-    // Log-compressed range so 100 m and 2 km both fit on the dial.
+    // Log-compressed range so 10 m and 2 km both fit on the dial, and the
+    // blip closes in on you as you approach.
     final r = radius * (1 - pow(0.5, d / 80).toDouble());
     final blip = center + Offset(sin(angle), -cos(angle)) * r;
-    canvas.drawCircle(blip, 8, Paint()..color = palette.error);
+
+    // Breathing pulse around the target, like a sonar ping.
+    final pingR = 8 + 10 * sin(progress * 2 * pi);
     canvas.drawCircle(
       blip,
-      14,
+      pingR,
       Paint()
         ..color = palette.error.withValues(alpha: 0.35)
         ..style = PaintingStyle.stroke,
     );
-    canvas.drawLine(center, blip, Paint()..color = palette.error.withValues(alpha: 0.4));
+    canvas.drawCircle(blip, 7, Paint()..color = palette.error);
+    canvas.drawLine(
+      center,
+      blip,
+      Paint()..color = palette.error.withValues(alpha: 0.4),
+    );
   }
 
   @override
@@ -452,27 +532,27 @@ class _RadarPainter extends CustomPainter {
       oldDelegate.bearingDeg != bearingDeg ||
       oldDelegate.distanceM != distanceM ||
       oldDelegate.heading != heading ||
-      oldDelegate.hasGps != hasGps ||
+      oldDelegate.hasBearing != hasBearing ||
       oldDelegate.palette.error != palette.error;
 }
 
-class _RespondToggle extends StatelessWidget {
-  const _RespondToggle({
+class _RespondButton extends StatelessWidget {
+  const _RespondButton({
     required this.active,
-    required this.onChanged,
+    required this.onPressed,
     required this.palette,
   });
 
   final bool active;
-  final ValueChanged<bool> onChanged;
+  final VoidCallback onPressed;
   final AppPalette palette;
 
   @override
   Widget build(BuildContext context) {
     return InkWell(
-      onTap: () => onChanged(!active),
+      onTap: onPressed,
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
         decoration: BoxDecoration(
           color: active ? palette.error : Colors.transparent,
           border: Border.all(

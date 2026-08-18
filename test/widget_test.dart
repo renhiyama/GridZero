@@ -6,6 +6,7 @@ import 'package:aapadsetu/ui/shell.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:qr_flutter/qr_flutter.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'fake_mesh_adapter.dart';
 
@@ -29,6 +30,7 @@ Future<void> teardown(WidgetTester tester, AppState state) async {
 }
 
 void main() {
+  setUp(() => SharedPreferences.setMockInitialValues({}));
   testWidgets('citizen shell renders dynamic QR and mesh HUD', (tester) async {
     final state = makeState();
     await initState(tester, state);

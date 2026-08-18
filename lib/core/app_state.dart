@@ -11,6 +11,7 @@ import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart' show ThemeMode;
 import 'package:geolocator/geolocator.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'ledger/ledger_store.dart';
 import 'ledger/open.dart';
@@ -23,6 +24,11 @@ import 'totp.dart';
 
 enum Role { citizen, officer }
 
+/// Preferences key holding the citizen identity. Persisting it makes the
+/// mesh node id stable across app restarts, so peers dedupe to one node
+/// instead of spawning a fresh identity per launch.
+const String _kCitizenIdPref = 'citizen_id';
+
 class AppState extends ChangeNotifier {
   Role _role = Role.citizen;
   Role get role => _role;
@@ -30,10 +36,10 @@ class AppState extends ChangeNotifier {
   String? _officerId;
   String? get officerId => _officerId;
 
-  final String citizenId =
-      'CIT-${sha256.convert(utf8.encode('${DateTime.now().microsecondsSinceEpoch}')).toString().substring(0, 8).toUpperCase()}';
+  String _citizenId = '';
+  String get citizenId => _citizenId;
   List<int> get citizenKey =>
-      sha256.convert(utf8.encode('aapadsetu:citizen:$citizenId')).bytes;
+      sha256.convert(utf8.encode('aapadsetu:citizen:$_citizenId')).bytes;
 
   late LedgerStore ledger;
   late MeshController mesh;
@@ -83,6 +89,9 @@ class AppState extends ChangeNotifier {
   Future<String> requestMeshPermissions() => mesh.adapter.ensurePermissions();
 
   Future<void> init() async {
+    final prefs = await SharedPreferences.getInstance();
+    _citizenId = prefs.getString(_kCitizenIdPref) ?? _freshCitizenId();
+    await prefs.setString(_kCitizenIdPref, _citizenId);
     ledger = await openLedgerStore();
     mesh = _buildMesh();
     await mesh.start();
@@ -96,6 +105,9 @@ class AppState extends ChangeNotifier {
     notifyListeners();
     await _acquireGps();
   }
+
+  static String _freshCitizenId() =>
+      'CIT-${sha256.convert(utf8.encode('${DateTime.now().microsecondsSinceEpoch}')).toString().substring(0, 8).toUpperCase()}';
 
   /// Real GPS lives on phones; laptops have none. Failure is normal —
   /// the app then falls back to the peer-consensus estimate.

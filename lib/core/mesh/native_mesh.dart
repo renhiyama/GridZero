@@ -11,6 +11,7 @@
 library;
 
 import 'dart:async';
+import 'dart:math';
 
 import 'package:ble_peripheral_plus/ble_peripheral_plus.dart';
 import 'package:flutter/foundation.dart';
@@ -24,7 +25,7 @@ import 'mesh_adapter.dart';
 const int kMeshCompanyId = 0xffff;
 
 /// How long each scan window runs before the radio sleeps again.
-const Duration _scanWindow = Duration(milliseconds: 2200);
+const Duration _scanWindow = Duration(milliseconds: 3000);
 
 /// Duty-cycle period (scan window + radio sleep).
 const Duration _dutyCycle = Duration(seconds: 6);
@@ -44,7 +45,11 @@ class NativeMeshAdapter implements MeshAdapter {
   String? _advertisingError;
   String? _scanError;
   String _permStatus = 'unknown';
-  final _seenPeers = <int>{};
+
+  /// Peers seen in the last few minutes (id -> last seen epoch), pruned each
+  /// scan cycle so the HUD count is live instead of a lifetime accumulator.
+  final Map<int, int> _peers = {};
+  final _rand = Random();
   int _advRetries = 0;
   StreamSubscription<List<ScanResult>>? _scanSub;
 
@@ -62,7 +67,7 @@ class NativeMeshAdapter implements MeshAdapter {
                 : 'ADV OFF'),
     );
     if (_scanError != null) parts.add('SCAN ERR ($_scanError)');
-    if (_seenPeers.isNotEmpty) parts.add('${_seenPeers.length} peer(s)');
+    if (_peers.isNotEmpty) parts.add('${_peers.length} peer(s)');
     return parts.join(' · ');
   }
 
@@ -100,9 +105,24 @@ class NativeMeshAdapter implements MeshAdapter {
     await ensurePermissions();
     await _startScanning();
     await _startAdvertising();
-    _dutyCycleTimer = Timer.periodic(_dutyCycle, (_) {
-      _runScanWindow();
-    });
+    _scheduleScanCycle();
+  }
+
+  /// Self-rescheduling cycle with jitter: two peers running near-equal duty
+  /// cycles otherwise drift into phase-lock where they both scan or both
+  /// sleep at once and never hear each other.
+  void _scheduleScanCycle() {
+    _prunePeers();
+    _dutyCycleTimer?.cancel();
+    _dutyCycleTimer = Timer(
+      _dutyCycle + Duration(milliseconds: _rand.nextInt(900)),
+      _runScanWindow,
+    );
+  }
+
+  void _prunePeers() {
+    final cutoff = DateTime.now().millisecondsSinceEpoch - 180000;
+    _peers.removeWhere((_, lastSeen) => lastSeen < cutoff);
   }
 
   Future<void> _runScanWindow() async {
@@ -119,10 +139,12 @@ class NativeMeshAdapter implements MeshAdapter {
         continuousDivisor: 1,
         timeout: _scanWindow,
       );
+      _scheduleScanCycle();
     } catch (e) {
       _scanning = false;
       _scanError = '$e';
       debugPrint('AapadSetu: scan window failed: $_scanError');
+      _scheduleScanCycle();
     }
   }
 
@@ -144,11 +166,7 @@ class NativeMeshAdapter implements MeshAdapter {
       if (payload == null) continue;
       try {
         final packet = MeshPacket.decode(Uint8List.fromList(payload));
-        if (_seenPeers.add(packet.senderId)) {
-          debugPrint(
-            'AapadSetu: peer ${packet.senderId} seen (rssi ${result.rssi})',
-          );
-        }
+        _peers[packet.senderId] = DateTime.now().millisecondsSinceEpoch;
         _rx.add(MeshRxPacket(packet: packet, rssi: result.rssi));
       } on FormatException {
         // foreign or corrupt frame; ignore

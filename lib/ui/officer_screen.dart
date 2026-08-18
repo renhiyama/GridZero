@@ -25,7 +25,8 @@ class OfficerScreen extends StatefulWidget {
 
 class _OfficerScreenState extends State<OfficerScreen> {
   ClaimResult? _lastClaim;
-  final bool _cameraUsable = !kIsWeb &&
+  final bool _cameraUsable =
+      !kIsWeb &&
       (defaultTargetPlatform == TargetPlatform.android ||
           defaultTargetPlatform == TargetPlatform.iOS ||
           defaultTargetPlatform == TargetPlatform.macOS);
@@ -37,67 +38,73 @@ class _OfficerScreenState extends State<OfficerScreen> {
     return SafeArea(
       child: app.officerId == null
           ? _EnlistGate(app: app, cameraUsable: _cameraUsable)
-          : Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
-                  child: Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(
-                          border: Border.all(color: p.primary),
-                          color: p.primary.withValues(alpha: 0.12),
-                        ),
-                        child: Text(
-                          'OFFICER ▸ ${app.officerId}',
-                          style: TextStyle(
-                            color: p.primary,
-                            fontFamily: 'monospace',
-                            fontSize: 12,
-                            letterSpacing: 1,
+          : DefaultTabController(
+              length: 3,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+                    child: Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 2,
+                          ),
+                          decoration: BoxDecoration(
+                            border: Border.all(color: p.primary),
+                            color: p.primary.withValues(alpha: 0.12),
+                          ),
+                          child: Text(
+                            'OFFICER ▸ ${app.officerId}',
+                            style: TextStyle(
+                              color: p.primary,
+                              fontFamily: 'monospace',
+                              fontSize: 12,
+                              letterSpacing: 1,
+                            ),
                           ),
                         ),
-                      ),
-                      const Spacer(),
-                      IconButton(
-                        onPressed: () => app.switchRole(Role.citizen),
-                        icon: Icon(Icons.logout,
-                            color: p.textDim, size: 18),
-                        tooltip: 'Return to citizen mode',
-                      ),
-                    ],
-                  ),
-                ),
-                const TabBar(tabs: [
-                  Tab(text: 'SCAN'),
-                  Tab(text: 'LEDGER'),
-                  Tab(text: 'MAP'),
-                ]),
-                Expanded(
-                  child: TabBarView(
-                    children: [
-                      _ScanTab(
-                        app: app,
-                        cameraUsable: _cameraUsable,
-                        onResult: (r) => setState(() => _lastClaim = r),
-                      ),
-                      _LedgerTab(app: app),
-                      _MapTab(app: app),
-                    ],
-                  ),
-                ),
-                if (_lastClaim != null)
-                  Padding(
-                    padding: const EdgeInsets.all(8),
-                    child: HudAlertBar(
-                      _claimText(_lastClaim!),
-                      color: _lastClaim!.ok ? p.primary : p.error,
+                        const Spacer(),
+                        IconButton(
+                          onPressed: () => app.switchRole(Role.citizen),
+                          icon: Icon(Icons.logout, color: p.textDim, size: 18),
+                          tooltip: 'Return to citizen mode',
+                        ),
+                      ],
                     ),
                   ),
-              ],
+                  const TabBar(
+                    tabs: [
+                      Tab(text: 'SCAN'),
+                      Tab(text: 'LEDGER'),
+                      Tab(text: 'MAP'),
+                    ],
+                  ),
+                  Expanded(
+                    child: TabBarView(
+                      children: [
+                        _ScanTab(
+                          app: app,
+                          cameraUsable: _cameraUsable,
+                          onResult: (r) => setState(() => _lastClaim = r),
+                        ),
+                        _LedgerTab(app: app),
+                        _MapTab(app: app),
+                      ],
+                    ),
+                  ),
+                  if (_lastClaim != null)
+                    Padding(
+                      padding: const EdgeInsets.all(8),
+                      child: HudAlertBar(
+                        _claimText(_lastClaim!),
+                        color: _lastClaim!.ok ? p.primary : p.error,
+                      ),
+                    ),
+                ],
+              ),
             ),
     );
   }
@@ -138,19 +145,25 @@ class _EnlistGate extends StatelessWidget {
               const SizedBox(height: 12),
               FilledButton(
                 onPressed: () async {
-                  final check =
-                      await app.enlistOfficer(kSampleMasterKeyPayload);
+                  final check = await app.enlistOfficer(
+                    kSampleMasterKeyPayload,
+                  );
                   if (!context.mounted) return;
-                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                    backgroundColor: check.ok ? p.primary : p.error,
-                    content: Text(check.ok
-                        ? 'OFFICER ENLISTED: ${check.masterKey!.officerId}'
-                        : check.message),
-                  ));
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      backgroundColor: check.ok ? p.primary : p.error,
+                      content: Text(
+                        check.ok
+                            ? 'OFFICER ENLISTED: ${check.masterKey!.officerId}'
+                            : check.message,
+                      ),
+                    ),
+                  );
                 },
-                child: const Text('USE DEMO MASTER KEY',
-                    style: TextStyle(
-                        fontFamily: 'monospace', letterSpacing: 1)),
+                child: const Text(
+                  'USE DEMO MASTER KEY',
+                  style: TextStyle(fontFamily: 'monospace', letterSpacing: 1),
+                ),
               ),
             ],
           ),
@@ -171,19 +184,25 @@ class _EnlistScanButton extends StatelessWidget {
     return FilledButton.icon(
       onPressed: () async {
         final payload = await Navigator.of(context).push<String>(
-          MaterialPageRoute(builder: (_) => const _QrScanPage(label: 'MASTER KEY')),
+          MaterialPageRoute(
+            builder: (_) => const _QrScanPage(label: 'MASTER KEY'),
+          ),
         );
         if (payload == null || !context.mounted) return;
         final check = await app.enlistOfficer(payload);
         if (!context.mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          backgroundColor: check.ok ? p.primary : p.error,
-          content: Text(check.ok ? 'OFFICER ENLISTED' : check.message),
-        ));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            backgroundColor: check.ok ? p.primary : p.error,
+            content: Text(check.ok ? 'OFFICER ENLISTED' : check.message),
+          ),
+        );
       },
       icon: const Icon(Icons.qr_code_scanner),
-      label: const Text('SCAN MASTER KEY QR',
-          style: TextStyle(fontFamily: 'monospace')),
+      label: const Text(
+        'SCAN MASTER KEY QR',
+        style: TextStyle(fontFamily: 'monospace'),
+      ),
     );
   }
 }
@@ -224,12 +243,14 @@ class _EnlistManualFieldState extends State<_EnlistManualField> {
             if (_ctrl.text.trim().isEmpty) return;
             final check = await widget.app.enlistOfficer(_ctrl.text.trim());
             if (!context.mounted) return;
-            ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-              backgroundColor: check.ok ? p.primary : p.error,
-              content: Text(check.message.isEmpty
-                  ? 'OFFICER ENLISTED'
-                  : check.message),
-            ));
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                backgroundColor: check.ok ? p.primary : p.error,
+                content: Text(
+                  check.message.isEmpty ? 'OFFICER ENLISTED' : check.message,
+                ),
+              ),
+            );
           },
           child: const Text('ENLIST'),
         ),
@@ -292,7 +313,9 @@ class _QrScanPageState extends State<_QrScanPage> {
               child: Text(
                 _cameraGranted ? '' : 'CAMERA PERMISSION REQUIRED',
                 style: const TextStyle(
-                    color: Colors.white54, fontFamily: 'monospace'),
+                  color: Colors.white54,
+                  fontFamily: 'monospace',
+                ),
               ),
             ),
     );
@@ -333,12 +356,16 @@ class _ScanTabState extends State<_ScanTab> {
     final p = AppPalette.of(context);
     widget.onResult(result);
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      backgroundColor: result.ok ? p.primary : p.error,
-      content: Text(result.ok
-          ? 'GRANTED: ${result.record!.citizenId} / ${result.record!.rationCode}'
-          : result.message),
-    ));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        backgroundColor: result.ok ? p.primary : p.error,
+        content: Text(
+          result.ok
+              ? 'GRANTED: ${result.record!.citizenId} / ${result.record!.rationCode}'
+              : result.message,
+        ),
+      ),
+    );
   }
 
   @override
@@ -349,14 +376,15 @@ class _ScanTabState extends State<_ScanTab> {
       children: [
         Row(
           children: [
-            Text('RATION ITEM',
-                style: TextStyle(color: p.textDim, fontFamily: 'monospace')),
+            Text(
+              'RATION ITEM',
+              style: TextStyle(color: p.textDim, fontFamily: 'monospace'),
+            ),
             const Spacer(),
             DropdownButton<String>(
               value: _rationCode,
               dropdownColor: p.panel,
-              style: TextStyle(
-                  color: p.primary, fontFamily: 'monospace'),
+              style: TextStyle(color: p.primary, fontFamily: 'monospace'),
               items: _items
                   .map((i) => DropdownMenuItem(value: i, child: Text(i)))
                   .toList(),
@@ -369,14 +397,18 @@ class _ScanTabState extends State<_ScanTab> {
           FilledButton.icon(
             onPressed: () async {
               final payload = await Navigator.of(context).push<String>(
-                MaterialPageRoute(builder: (_) => const _QrScanPage(label: 'CITIZEN CLAIM QR')),
+                MaterialPageRoute(
+                  builder: (_) => const _QrScanPage(label: 'CITIZEN CLAIM QR'),
+                ),
               );
               if (payload == null) return;
               _showClaimResult(await _claim(payload));
             },
             icon: const Icon(Icons.qr_code_scanner),
-            label: const Text('SCAN CITIZEN DYNAMIC QR',
-                style: TextStyle(fontFamily: 'monospace')),
+            label: const Text(
+              'SCAN CITIZEN DYNAMIC QR',
+              style: TextStyle(fontFamily: 'monospace'),
+            ),
           ),
           const SizedBox(height: 12),
           const HduReadout('OR', 'manual claim payload entry'),
@@ -388,7 +420,9 @@ class _ScanTabState extends State<_ScanTab> {
               child: TextField(
                 controller: _ctrl,
                 style: const TextStyle(fontFamily: 'monospace', fontSize: 11),
-                decoration: const InputDecoration(hintText: '{"v":1,"c":"CIT-..","w":..,"tok":".."}'),
+                decoration: const InputDecoration(
+                  hintText: '{"v":1,"c":"CIT-..","w":..,"tok":".."}',
+                ),
               ),
             ),
             const SizedBox(width: 8),
@@ -403,8 +437,10 @@ class _ScanTabState extends State<_ScanTab> {
           ],
         ),
         const SizedBox(height: 12),
-        HduReadout('VERIFY PATH',
-            'TOTP-HMAC-SHA256 30s window ▸ daily-duplicate rejection ▸ append-only chain'),
+        HduReadout(
+          'VERIFY PATH',
+          'TOTP-HMAC-SHA256 30s window ▸ daily-duplicate rejection ▸ append-only chain',
+        ),
       ],
     );
   }
@@ -426,10 +462,12 @@ class _LedgerTab extends StatelessWidget {
           padding: const EdgeInsets.all(12),
           children: [
             HduReadout('RECORDS', '${records.length}'),
-            HduReadout('CHAIN TAIL',
-                records.isEmpty
-                    ? 'GENESIS'
-                    : records.first.currentHash.substring(0, 16)),
+            HduReadout(
+              'CHAIN TAIL',
+              records.isEmpty
+                  ? 'GENESIS'
+                  : records.first.currentHash.substring(0, 16),
+            ),
             const SizedBox(height: 8),
             for (final r in records.take(40))
               Padding(
@@ -479,7 +517,10 @@ class _MapTab extends StatelessWidget {
           left: 8,
           bottom: 8,
           child: HduReadout(
-              'NODES', '${app.mesh.nodes.length}', color: p.secondary),
+            'NODES',
+            '${app.mesh.nodes.length}',
+            color: p.secondary,
+          ),
         ),
       ],
     );
@@ -534,15 +575,16 @@ class _TacticalMapPainter extends CustomPainter {
 
       for (final node in nodes) {
         final x = (node.longitude - minLon) / lonSpan * (size.width - 24) + 12;
-        final y = (size.height - 24) -
+        final y =
+            (size.height - 24) -
             (node.latitude - minLat) / latSpan * (size.height - 24) +
             12;
         final isSelf = node.nodeId == ownNodeId;
         final color = isSelf
             ? primary
             : node.hasSos
-                ? error
-                : secondary;
+            ? error
+            : secondary;
         final r = isSelf ? 8.0 : 5.0;
 
         canvas.drawCircle(Offset(x, y), r, Paint()..color = color);
@@ -574,7 +616,11 @@ class _TacticalMapPainter extends CustomPainter {
       final tp = TextPainter(
         text: TextSpan(
           text: 'AWAITING MESH BEACONS',
-          style: TextStyle(color: textDim, fontFamily: 'monospace', fontSize: 11),
+          style: TextStyle(
+            color: textDim,
+            fontFamily: 'monospace',
+            fontSize: 11,
+          ),
         ),
         textDirection: TextDirection.ltr,
       )..layout();

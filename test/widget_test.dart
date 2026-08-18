@@ -1,5 +1,6 @@
 import 'package:aapadsetu/app_scope.dart';
 import 'package:aapadsetu/core/app_state.dart';
+import 'package:aapadsetu/core/master_key.dart';
 import 'package:aapadsetu/core/mesh/mesh_adapter.dart';
 import 'package:aapadsetu/core/mesh/simulated_mesh.dart';
 import 'package:aapadsetu/ui/hud_theme.dart';
@@ -56,6 +57,26 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.textContaining('OFFICER ENLISTMENT'), findsOneWidget);
+
+    await teardown(tester, state);
+  });
+
+  testWidgets('enlisted officer sees SCAN/LEDGER/MAP tabs', (tester) async {
+    final state = makeState();
+    await initState(tester, state);
+    await tester.pumpWidget(app(state));
+    await tester.pump();
+
+    await tester.tap(find.text('OFFICER'));
+    await tester.pumpAndSettle();
+
+    await tester.runAsync(() => state.enlistOfficer(kSampleMasterKeyPayload));
+    await tester.pumpAndSettle();
+
+    expect(find.text('OFFICER ▸ OFF-0A3F0FAB'), findsOneWidget);
+    expect(find.text('SCAN'), findsOneWidget);
+    expect(find.text('LEDGER'), findsOneWidget);
+    expect(find.text('MAP'), findsOneWidget);
 
     await teardown(tester, state);
   });

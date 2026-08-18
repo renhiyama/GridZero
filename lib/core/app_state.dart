@@ -36,7 +36,11 @@ class AppState extends ChangeNotifier {
 
   late LedgerStore ledger;
   late MeshController mesh;
-  bool _useSimulator = kIsWeb;
+  // BLE mesh is a phone thing; desktop/web default to the local simulator
+  // (scanning may still work via bluez, but advertising generally does not).
+  bool _useSimulator =
+      !(defaultTargetPlatform == TargetPlatform.android ||
+          defaultTargetPlatform == TargetPlatform.iOS);
   bool get useSimulator => _useSimulator;
 
   bool sosActive = false;
@@ -84,8 +88,8 @@ class AppState extends ChangeNotifier {
   MeshController _buildMesh() {
     final nodeId =
         (sha256.convert(utf8.encode(citizenId)).bytes[0] << 8 |
-                sha256.convert(utf8.encode(citizenId)).bytes[1]) &
-            0xffff;
+            sha256.convert(utf8.encode(citizenId)).bytes[1]) &
+        0xffff;
     final adapter = _useSimulator
         ? SimulatedMeshAdapter() as MeshAdapter
         : _nativeAdapter(nodeId);
@@ -102,8 +106,7 @@ class AppState extends ChangeNotifier {
     throw UnsupportedError('no native mesh adapter registered');
   };
 
-  MeshAdapter _nativeAdapter(int nodeId) =>
-      nativeAdapterFactory(nodeId);
+  MeshAdapter _nativeAdapter(int nodeId) => nativeAdapterFactory(nodeId);
 
   Future<void> setUseSimulator(bool value) async {
     if (value == _useSimulator) return;
@@ -115,27 +118,30 @@ class AppState extends ChangeNotifier {
   }
 
   /// Current TOTP token for this device's citizen QR.
-  String currentToken() =>
-      totpToken(citizenId: citizenId, citizenKey: citizenKey, timeWindow: totpTimeWindow(DateTime.now()));
+  String currentToken() => totpToken(
+    citizenId: citizenId,
+    citizenKey: citizenKey,
+    timeWindow: totpTimeWindow(DateTime.now()),
+  );
 
   String citizenQrPayload() => jsonEncode({
-        'v': 1,
-        'c': citizenId,
-        'w': totpTimeWindow(DateTime.now()),
-        'tok': currentToken(),
-      });
+    'v': 1,
+    'c': citizenId,
+    'w': totpTimeWindow(DateTime.now()),
+    'tok': currentToken(),
+  });
 
-void setSosActive(bool active) {
-  sosActive = active;
-  _sosTimer?.cancel();
-  if (active) {
-    mesh.broadcastSos(triage: sosFlags);
-    _sosTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+  void setSosActive(bool active) {
+    sosActive = active;
+    _sosTimer?.cancel();
+    if (active) {
       mesh.broadcastSos(triage: sosFlags);
-    });
+      _sosTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+        mesh.broadcastSos(triage: sosFlags);
+      });
+    }
+    notifyListeners();
   }
-  notifyListeners();
-}
 
   void setSosFlags(TriageFlags flags) {
     sosFlags = flags;
@@ -143,7 +149,10 @@ void setSosActive(bool active) {
   }
 
   /// Officer path: verify a scanned citizen QR and append a claim.
-  Future<ClaimResult> claimFromPayload(String payload, String rationCode) async {
+  Future<ClaimResult> claimFromPayload(
+    String payload,
+    String rationCode,
+  ) async {
     final map = _decodeClaimPayload(payload);
     if (map == null) {
       return ClaimResult(ClaimStatus.error, message: 'malformed claim QR');
@@ -154,7 +163,9 @@ void setSosActive(bool active) {
     if (citizenIdFromQr == null || window == null || token == null) {
       return ClaimResult(ClaimStatus.error, message: 'claim QR missing fields');
     }
-    final key = sha256.convert(utf8.encode('aapadsetu:citizen:$citizenIdFromQr')).bytes;
+    final key = sha256
+        .convert(utf8.encode('aapadsetu:citizen:$citizenIdFromQr'))
+        .bytes;
     final valid = totpVerify(
       citizenId: citizenIdFromQr,
       citizenKey: key,
@@ -162,8 +173,10 @@ void setSosActive(bool active) {
       now: DateTime.now(),
     );
     if (!valid) {
-      return ClaimResult(ClaimStatus.invalidToken,
-          message: 'TOTP token expired or forged');
+      return ClaimResult(
+        ClaimStatus.invalidToken,
+        message: 'TOTP token expired or forged',
+      );
     }
     return _appendClaim(
       citizenId: citizenIdFromQr,
@@ -203,13 +216,13 @@ void setSosActive(bool active) {
   }
 
   MeshPacket _buildLedgerPacket() => MeshPacket(
-        type: MeshPacketType.ledgerSyncRequest,
-        senderId: mesh.nodeId,
-        latitude: mesh.startLatitude,
-        longitude: mesh.startLongitude,
-        triage: TriageFlags(),
-        seq: _claimSeq & 0xffff,
-      );
+    type: MeshPacketType.ledgerSyncRequest,
+    senderId: mesh.nodeId,
+    latitude: mesh.startLatitude,
+    longitude: mesh.startLongitude,
+    triage: TriageFlags(),
+    seq: _claimSeq & 0xffff,
+  );
 
   Map<String, Object?>? _decodeClaimPayload(String payload) {
     try {

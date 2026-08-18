@@ -388,11 +388,11 @@ class _LocationPanel extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        HduReadout('POSITION', 'NO GPS FIX'),
+        HduReadout('POSITION', 'NO GPS HW FOUND'),
         const SizedBox(height: 4),
         Text(
-          'No GPS on this device. Position will be estimated from '
-          'nearby mesh devices once they are heard.',
+          'LOOKING FOR NEARBY DEVICES…\n'
+          'Position will be estimated from mesh devices once they are heard.',
           style: TextStyle(
             color: p.textDim,
             fontFamily: 'monospace',

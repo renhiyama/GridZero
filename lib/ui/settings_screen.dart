@@ -55,7 +55,14 @@ class _LocationRows extends StatelessWidget {
             ],
           );
         }
-        return const HduReadout('POSITION', 'NO GPS FIX');
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const HduReadout('POSITION', 'NO GPS HW FOUND'),
+            const SizedBox(height: 2),
+            const HduReadout('ESTIMATE', 'LOOKING FOR NEARBY DEVICES'),
+          ],
+        );
       },
     );
   }

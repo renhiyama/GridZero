@@ -616,7 +616,7 @@ class _MapTabState extends State<_MapTab> {
                   ? 'ESTIMATED POSITION (${mesh.approxSourceCount} '
                         'device${mesh.approxSourceCount == 1 ? '' : 's'} · '
                         '≈${mesh.approxRadiusKm!.toStringAsFixed(1)} km)'
-                  : 'NO GPS FIX — awaiting mesh devices',
+                  : 'NO GPS HW FOUND — LOOKING FOR DEVICES',
               style: TextStyle(
                 color: estimated ? p.secondary : p.error,
                 fontFamily: 'monospace',

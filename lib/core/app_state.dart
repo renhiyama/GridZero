@@ -10,6 +10,7 @@ import 'dart:ui' show Color;
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart' show ThemeMode;
+import 'package:geolocator/geolocator.dart';
 
 import 'ledger/ledger_store.dart';
 import 'ledger/open.dart';
@@ -82,6 +83,37 @@ class AppState extends ChangeNotifier {
     });
     initialized = true;
     notifyListeners();
+    await _acquireGps();
+  }
+
+  /// Real GPS lives on phones; laptops/web have none. Failure is normal —
+  /// the app then falls back to the peer-consensus estimate.
+  Future<void> _acquireGps() async {
+    if (kIsWeb) return;
+    if (defaultTargetPlatform != TargetPlatform.android &&
+        defaultTargetPlatform != TargetPlatform.iOS) {
+      return;
+    }
+    try {
+      var permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+      if (permission == LocationPermission.denied ||
+          permission == LocationPermission.deniedForever) {
+        return;
+      }
+      final pos = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.medium,
+          timeLimit: Duration(seconds: 8),
+        ),
+      );
+      mesh.setGpsFix(latitude: pos.latitude, longitude: pos.longitude);
+      notifyListeners();
+    } catch (_) {
+      // no fix (e.g. denied, no satellites); keep the no-GPS fallback
+    }
   }
 
   Timer? _heartbeat;

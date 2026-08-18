@@ -34,8 +34,9 @@ class LedgerRecord {
   String prevHash;
   String currentHash;
 
-  /// 0: Local Only, 1: Mesh Synced, 2: Cloud Synced.
-  final int syncStatus;
+  /// 0: Local Only, 1: Mesh Synced, 2: Cloud Synced. Mutable so the store can
+  /// flag records as shipped after they leave on the mesh.
+  int syncStatus;
 
   /// Canonical record data used to build the chain hash.
   String recordData() =>
@@ -79,6 +80,17 @@ class ClaimResult {
   bool get ok => status == ClaimStatus.granted;
 }
 
+enum SyncStatus { merged, duplicate }
+
+class SyncResult {
+  const SyncResult(this.status, {this.message = ''});
+
+  final SyncStatus status;
+  final String message;
+
+  bool get ok => status == SyncStatus.merged;
+}
+
 /// Persistence contract used by both the SQLite and in-memory backends.
 abstract class LedgerStore {
   Future<void> close();
@@ -92,6 +104,24 @@ abstract class LedgerStore {
   /// Persists a claim after validation; rejects duplicates within the same
   /// UTC day (FR-3.4) and any hash-chain break.
   Future<ClaimResult> append(LedgerRecord record);
+
+  /// Records not yet shipped onto the mesh (sync_status == 0).
+  Future<List<LedgerRecord>> pendingRecords();
+
+  /// Marks shipped records as mesh-synced (sync_status = 1).
+  Future<void> markSynced(List<String> recordIds);
+
+  /// How many records this node has absorbed from other devices' chains
+  /// (store-and-forward ledger sync).
+  Future<int> syncRecordsCount();
+
+  /// Merges a record received over the mesh into the aggregated store.
+  /// Rejects exact duplicates (same record_id) and cross-officer double
+  /// claims within a UTC day (same citizen + ration).
+  Future<SyncResult> mergeRecord({
+    required LedgerRecord record,
+    required int receivedFrom,
+  });
 
   /// Destructive: discards every stored record. Used by "Delete All Data".
   Future<void> wipe();

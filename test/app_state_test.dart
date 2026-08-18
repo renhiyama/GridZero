@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:aapadsetu/core/app_state.dart';
 import 'package:aapadsetu/core/ledger/ledger_store.dart';
 import 'package:aapadsetu/core/master_key.dart';
+import 'package:aapadsetu/core/mesh_packet.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -155,6 +156,95 @@ void main() {
     );
 
     citizen.dispose();
+    app.dispose();
+  });
+
+  test('login announces account identity onto the mesh', () async {
+    final app = makeState();
+    await app.init();
+    await app.register('NAMED', 'pass', Role.officer);
+    final adapter = app.mesh!.adapter as FakeMeshAdapter;
+    final idPkts = adapter.broadcasted
+        .where((p) => p.type == MeshPacketType.identityAnnounce)
+        .toList();
+    expect(idPkts, isNotEmpty);
+    expect(idPkts.first.identityUsername, 'NAMED');
+    expect(idPkts.first.identityRole, kRoleOfficer);
+    app.dispose();
+  });
+
+  test(
+    'claim pushes a ledger record that syncs back through the mesh (FR-3.5)',
+    () async {
+      final officer = makeState();
+      await officer.init();
+      await officer.register('OFFSYNC', 'pass', Role.officer);
+      final adapter = officer.mesh!.adapter as FakeMeshAdapter;
+
+      final citizen = makeState();
+      await citizen.init();
+      await citizen.register('CITSYNC', 'pass', Role.citizen);
+
+      final result = await officer.claimFromPayload(
+        citizen.citizenQrPayload(),
+        'Rice',
+      );
+      expect(result.status, ClaimStatus.granted);
+      // The fresh claim is pushed onto the mesh and marked shipped so a later
+      // pull request never re-sends it.
+      final pushes = adapter.broadcasted
+          .where((p) => p.type == MeshPacketType.ledgerRecord)
+          .toList();
+      expect(pushes, isNotEmpty);
+      expect(pushes.last.syncRecord!.rationCode, 'Rice');
+      expect(await officer.ledger.pendingRecords(), isEmpty);
+
+      citizen.dispose();
+      officer.dispose();
+    },
+  );
+
+  test('remote ledger records merge once and dedupe (FR-3.5)', () async {
+    final app = makeState();
+    await app.init();
+    await app.register('HUB', 'pass', Role.officer);
+    final adapter = app.mesh!.adapter as FakeMeshAdapter;
+
+    CompactRecord rec() => CompactRecord(
+      citizenId: 'CIT-0A3F0FAB',
+      officerId: 'OFF-00BEEF',
+      claimedAt: 1700000000,
+      rationCode: 'Medicine',
+    );
+    await adapter.injectRemote(
+      MeshPacket(
+        type: MeshPacketType.ledgerRecord,
+        senderId: 0x77,
+        latitude: 0,
+        longitude: 0,
+        triage: TriageFlags(),
+        seq: 1,
+        syncRecord: rec(),
+      ),
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+    expect(await app.ledger.syncRecordsCount(), 1);
+
+    // Same claim relayed again (or a cross-officer double-claim) is dropped.
+    await adapter.injectRemote(
+      MeshPacket(
+        type: MeshPacketType.ledgerRecord,
+        senderId: 0x88,
+        latitude: 0,
+        longitude: 0,
+        triage: TriageFlags(),
+        seq: 2,
+        syncRecord: rec(),
+      ),
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+    expect(await app.ledger.syncRecordsCount(), 1);
+
     app.dispose();
   });
 }

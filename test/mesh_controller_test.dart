@@ -250,4 +250,91 @@ void main() {
       await ctrl.stop();
     },
   );
+
+  test(
+    'identity announce names the node without clobbering position',
+    () async {
+      final adapter = FakeMeshAdapter();
+      final ctrl = MeshController(nodeId: 0x1111, adapter: adapter);
+      await ctrl.start();
+
+      await adapter.injectRemote(
+        MeshPacket(
+          type: MeshPacketType.relayStatus,
+          senderId: 0x2222,
+          latitude: 19.0,
+          longitude: 72.8,
+          triage: TriageFlags(),
+          seq: 1,
+        ),
+      );
+      await adapter.injectRemote(
+        MeshPacket(
+          type: MeshPacketType.identityAnnounce,
+          senderId: 0x2222,
+          latitude: 0,
+          longitude: 0,
+          triage: TriageFlags(),
+          seq: 2,
+          identityUsername: 'REN',
+          identityRole: kRoleCitizen,
+        ),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+
+      final node = ctrl.nodes[0x2222]!;
+      expect(node.username, 'REN');
+      expect(node.roleCode, kRoleCitizen);
+      // The identity frame must not erase the position learned earlier.
+      expect(node.latitude, closeTo(19.0, 1e-9));
+      expect(node.longitude, closeTo(72.8, 1e-9));
+      await ctrl.stop();
+    },
+  );
+
+  test(
+    'ledger record routes to onLedgerRecord; request routes to pull',
+    () async {
+      final adapter = FakeMeshAdapter();
+      final ctrl = MeshController(nodeId: 0x1111, adapter: adapter);
+      final records = <CompactRecord>[];
+      final requests = <int>[];
+      ctrl.onLedgerRecord = (r, from) => records.add(r);
+      ctrl.onLedgerSyncRequest = requests.add;
+      await ctrl.start();
+
+      await adapter.injectRemote(
+        MeshPacket(
+          type: MeshPacketType.ledgerRecord,
+          senderId: 0x2222,
+          latitude: 0,
+          longitude: 0,
+          triage: TriageFlags(),
+          seq: 1,
+          syncRecord: CompactRecord(
+            citizenId: 'CIT-0A3F0FAB',
+            officerId: 'OFF-00BEEF',
+            claimedAt: 1700000000,
+            rationCode: 'Rice',
+          ),
+        ),
+      );
+      await adapter.injectRemote(
+        MeshPacket(
+          type: MeshPacketType.ledgerSyncRequest,
+          senderId: 0x2222,
+          latitude: 0,
+          longitude: 0,
+          triage: TriageFlags(),
+          seq: 2,
+        ),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+
+      expect(records, hasLength(1));
+      expect(records.single.citizenId, 'CIT-0A3F0FAB');
+      expect(requests, [0x2222]);
+      await ctrl.stop();
+    },
+  );
 }

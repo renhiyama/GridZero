@@ -189,6 +189,10 @@ void main() {
     expect(find.text('CITIZEN'), findsNothing);
     expect(find.text('OFFICER'), findsNothing);
 
+    await tester.drag(find.byType(ListView).first, const Offset(0, -1400));
+    await tester.pumpAndSettle();
+    expect(find.text('PEERS'), findsWidgets);
+
     await teardown(tester, state);
   });
 }

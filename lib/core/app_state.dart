@@ -19,6 +19,7 @@ import 'master_key.dart';
 import 'mesh/bluez_mesh.dart';
 import 'mesh/mesh_adapter.dart';
 import 'mesh/mesh_controller.dart';
+import 'mesh/mesh_node.dart';
 import 'mesh_packet.dart';
 import 'totp.dart';
 
@@ -68,7 +69,6 @@ class AppState extends ChangeNotifier {
   bool sosActive = false;
   TriageFlags sosFlags = TriageFlags(severity: 3);
   int claimCount = 0;
-  int _claimSeq = 0;
   bool initialized = false;
 
   /// Tab switch requested by a deep link or notification tap; the shell
@@ -152,6 +152,9 @@ class AppState extends ChangeNotifier {
   Future<String?> register(String username, String password, Role role) async {
     final name = username.trim().toUpperCase();
     if (name.isEmpty) return 'enter a username';
+    if (name.length > 12) {
+      return 'username must be 12 characters or less (fits the mesh frame)';
+    }
     if (name == 'ADMIN') return 'ADMIN is reserved for HQ';
     if (password.length < 4) return 'password must be 4+ characters';
     final prefs = await SharedPreferences.getInstance();
@@ -200,15 +203,91 @@ class AppState extends ChangeNotifier {
     _citizenId = _freshCitizenId(_seed());
     mesh = _buildMesh(_seed());
     final m = mesh!;
+    m.onLedgerRecord = _onLedgerRecord;
+    m.onLedgerSyncRequest = (_) => _pushPendingRecords();
+    _knownPeerIds.clear();
+    m.nodeUpdates.listen(_onPeerDiscovery);
     await m.start();
     m.announce();
+    // Tell peers who we are so their peer list shows a name, not a hex id.
+    m.broadcastIdentity(username, _roleCode(role));
     _heartbeat = Timer.periodic(const Duration(seconds: 10), (_) {
-      mesh?.announce();
+      final mesh = this.mesh;
+      if (mesh == null) return;
+      mesh.announce();
+      mesh.broadcastIdentity(this.username, _roleCode(this.role));
+      // Every third tick, ask the mesh to push records we haven't seen.
+      if (_heartbeatTick % 3 == 2) mesh.broadcastLedgerSyncRequest();
+      _heartbeatTick++;
     });
     loggedIn = true;
     notifyListeners();
     await _acquireGps();
     return null;
+  }
+
+  static int _roleCode(Role role) => switch (role) {
+    Role.citizen => kRoleCitizen,
+    Role.officer => kRoleOfficer,
+    Role.admin => kRoleAdmin,
+  };
+
+  final Set<int> _knownPeerIds = {};
+  int _heartbeatTick = 0;
+
+  /// When a new node appears (fresh peer, not us), pull its records. A relay
+  /// carries the request onward, so officers deep in the mesh eventually
+  /// answer even if this device only hears the edge.
+  void _onPeerDiscovery(Map<int, MeshNodeState> nodes) {
+    for (final id in nodes.keys) {
+      if (id == mesh?.nodeId) continue;
+      if (_knownPeerIds.add(id)) {
+        mesh?.broadcastLedgerSyncRequest();
+      }
+    }
+  }
+
+  /// Push all locally-unsynced claims as compact records, then mark shipped.
+  Future<void> _pushPendingRecords() async {
+    final m = mesh;
+    if (m == null) return;
+    final pending = await ledger.pendingRecords();
+    for (final r in pending) {
+      m.broadcastLedgerRecord(
+        CompactRecord(
+          citizenId: r.citizenId,
+          officerId: r.officerId,
+          claimedAt: r.claimedAt,
+          rationCode: r.rationCode,
+        ),
+      );
+    }
+    await ledger.markSynced(pending.map((r) => r.recordId).toList());
+    if (pending.isNotEmpty) notifyListeners();
+  }
+
+  /// Absorb a record relayed from another device's chain. Duplicates and
+  /// cross-officer daily double-claims are rejected by the store.
+  Future<void> _onLedgerRecord(CompactRecord record, int fromNodeId) async {
+    final now = record.claimedAt;
+    final recordId = sha256
+        .convert(utf8.encode('${record.citizenId}|${record.rationCode}|$now'))
+        .toString()
+        .substring(0, 24);
+    final result = await ledger.mergeRecord(
+      receivedFrom: fromNodeId,
+      record: LedgerRecord(
+        recordId: recordId,
+        citizenId: record.citizenId,
+        rationCode: record.rationCode,
+        claimedAt: now,
+        officerId: record.officerId,
+        prevHash: '',
+        currentHash: '',
+        syncStatus: 1,
+      ),
+    );
+    if (result.ok) notifyListeners();
   }
 
   /// Stops the radio and returns to the login screen. Identity and ledger
@@ -224,6 +303,8 @@ class AppState extends ChangeNotifier {
     if (m != null) {
       await m.stop();
     }
+    _knownPeerIds.clear();
+    _heartbeatTick = 0;
     loggedIn = false;
     _username = '';
     _role = Role.citizen;
@@ -395,23 +476,24 @@ class AppState extends ChangeNotifier {
     final result = await ledger.append(record);
     if (result.ok) {
       claimCount++;
-      _claimSeq++;
-      mesh?.broadcast(_buildLedgerPacket());
+      final m = mesh;
+      if (m != null) {
+        // Push the fresh claim immediately (store-and-forward) and mark it
+        // shipped; the periodic request re-syncs anything the mesh missed.
+        m.broadcastLedgerRecord(
+          CompactRecord(
+            citizenId: record.citizenId,
+            officerId: record.officerId,
+            claimedAt: record.claimedAt,
+            rationCode: record.rationCode,
+          ),
+        );
+        m.broadcastLedgerSyncRequest();
+        await ledger.markSynced([record.recordId]);
+      }
     }
     notifyListeners();
     return result;
-  }
-
-  MeshPacket _buildLedgerPacket() {
-    final m = mesh!;
-    return MeshPacket(
-      type: MeshPacketType.ledgerSyncRequest,
-      senderId: m.nodeId,
-      latitude: m.gpsFix ? m.gpsLatitude! : 0,
-      longitude: m.gpsFix ? m.gpsLongitude! : 0,
-      triage: TriageFlags(),
-      seq: _claimSeq & 0xffff,
-    );
   }
 
   Map<String, Object?>? _decodeClaimPayload(String payload) {

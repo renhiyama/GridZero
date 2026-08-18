@@ -128,4 +128,94 @@ void main() {
       throwsFormatException,
     );
   });
+
+  test('identity announce roundtrips username + role in 12 bytes', () {
+    final p = MeshPacket(
+      type: MeshPacketType.identityAnnounce,
+      senderId: 0x2222,
+      latitude: 0,
+      longitude: 0,
+      triage: TriageFlags(),
+      seq: 9,
+      identityUsername: 'OFFICER1',
+      identityRole: kRoleOfficer,
+    );
+    final decoded = MeshPacket.decode(p.encode());
+    expect(decoded.type, MeshPacketType.identityAnnounce);
+    expect(decoded.identityUsername, 'OFFICER1');
+    expect(decoded.identityRole, kRoleOfficer);
+    expect(decoded.senderId, 0x2222);
+  });
+
+  test('identity truncates overlong usernames to the frame limit', () {
+    final p = MeshPacket(
+      type: MeshPacketType.identityAnnounce,
+      senderId: 1,
+      latitude: 0,
+      longitude: 0,
+      triage: TriageFlags(),
+      seq: 1,
+      identityUsername: 'ABCDEFGHIJKLMNOP',
+      identityRole: kRoleCitizen,
+    );
+    final decoded = MeshPacket.decode(p.encode());
+    expect(decoded.identityUsername, 'ABCDEFGHIJKL');
+  });
+
+  test('ledger record roundtrips a compact claim', () {
+    final p = MeshPacket(
+      type: MeshPacketType.ledgerRecord,
+      senderId: 0x3333,
+      latitude: 0,
+      longitude: 0,
+      triage: TriageFlags(),
+      seq: 3,
+      syncRecord: CompactRecord(
+        citizenId: 'CIT-0A3F0FAB',
+        officerId: 'OFF-00BEEFA1',
+        claimedAt: 1700000000,
+        rationCode: 'Medicine',
+      ),
+    );
+    final decoded = MeshPacket.decode(p.encode());
+    expect(decoded.type, MeshPacketType.ledgerRecord);
+    expect(decoded.syncRecord!.citizenId, 'CIT-0A3F0FAB');
+    expect(decoded.syncRecord!.officerId, 'OFF-00BEEFA1');
+    expect(decoded.syncRecord!.claimedAt, 1700000000);
+    expect(decoded.syncRecord!.rationCode, 'Medicine');
+  });
+
+  test('ledger record survives a relay hop (hop bumped, payload intact)', () {
+    final p = MeshPacket(
+      type: MeshPacketType.ledgerRecord,
+      senderId: 0x4444,
+      latitude: 0,
+      longitude: 0,
+      triage: TriageFlags(),
+      seq: 5,
+      initialTtl: 5,
+      syncRecord: CompactRecord(
+        citizenId: 'CIT-12345678',
+        officerId: 'OFF-87654321',
+        claimedAt: 1700000001,
+        rationCode: 'Rice',
+      ),
+    );
+    final relay = MeshPacket(
+      type: p.type,
+      senderId: p.senderId,
+      latitude: 0,
+      longitude: 0,
+      triage: TriageFlags(),
+      seq: p.seq,
+      initialTtl: p.initialTtl,
+      hopCount: p.hopCount + 1,
+      syncRecord: p.syncRecord,
+    );
+    final decoded = MeshPacket.decode(relay.encode());
+    expect(decoded.hopCount, 1);
+    expect(decoded.syncRecord!.citizenId, 'CIT-12345678');
+    expect(decoded.syncRecord!.officerId, 'OFF-87654321');
+    expect(decoded.syncRecord!.rationCode, 'Rice');
+  });
 }

@@ -13,6 +13,7 @@ import '../app_scope.dart';
 import '../core/ledger/ledger_store.dart';
 import '../core/master_key.dart';
 import '../core/mesh/mesh_node.dart';
+import '../core/mesh_packet.dart';
 import 'hud_theme.dart';
 import 'mesh_map.dart';
 
@@ -93,6 +94,7 @@ class _HqScreenState extends State<HqScreen> {
                 final telemetry = _TelemetryPanel(app: app);
                 final fieldMap = _FieldMapPanel(app: app);
                 final enlistQr = _EnlistmentPanel();
+                final peers = _PeersPanel(app: app);
                 final heatmap = _HeatmapPanel(
                   nodes: app.mesh!.nodes.values.toList(),
                   palette: AppPalette.of(context),
@@ -121,6 +123,8 @@ class _HqScreenState extends State<HqScreen> {
                           children: [
                             enlistQr,
                             const SizedBox(height: 12),
+                            peers,
+                            const SizedBox(height: 12),
                             logs,
                           ],
                         ),
@@ -139,6 +143,8 @@ class _HqScreenState extends State<HqScreen> {
                     const SizedBox(height: 12),
                     heatmap,
                     const SizedBox(height: 12),
+                    peers,
+                    const SizedBox(height: 12),
                     logs,
                   ],
                 );
@@ -156,6 +162,11 @@ class _TelemetryPanel extends StatelessWidget {
 
   final dynamic app;
 
+  Future<(int, int)> _counts() async => (
+    (await app.ledger.recordsCount()) as int,
+    (await app.ledger.syncRecordsCount()) as int,
+  );
+
   @override
   Widget build(BuildContext context) {
     final p = AppPalette.of(context);
@@ -163,27 +174,31 @@ class _TelemetryPanel extends StatelessWidget {
     final sosCount = nodes.where((MeshNodeState n) => n.hasSos).length;
     return HudPanel(
       title: 'AGGREGATE MESH HEALTH',
-      child: FutureBuilder<int>(
-        future: app.ledger.recordsCount(),
-        builder: (context, snapshot) => Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            HduReadout('FRAMES RX', '${app.mesh.framesSeen}'),
-            HduReadout('FRAMES RELAYED', '${app.mesh.framesRelayed}'),
-            HduReadout('PEOPLE IN MESH', '${nodes.length}'),
-            HduReadout(
-              'ACTIVE SOS BEACONS',
-              '$sosCount',
-              color: sosCount > 0 ? p.error : p.primary,
-            ),
-            HduReadout('RATIONS ALLOCATED', '${app.claimCount}'),
-            HduReadout('LEDGER RECORDS', '${snapshot.data ?? '…'}'),
-            HduReadout(
-              'MAX HOP SEEN',
-              '${nodes.fold<int>(0, (int m, MeshNodeState n) => n.hopCount > m ? n.hopCount : m)}',
-            ),
-          ],
-        ),
+      child: FutureBuilder<(int, int)>(
+        future: _counts(),
+        builder: (context, snapshot) {
+          final (local, synced) = snapshot.data ?? (0, 0);
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              HduReadout('FRAMES RX', '${app.mesh.framesSeen}'),
+              HduReadout('FRAMES RELAYED', '${app.mesh.framesRelayed}'),
+              HduReadout('PEOPLE IN MESH', '${nodes.length}'),
+              HduReadout(
+                'ACTIVE SOS BEACONS',
+                '$sosCount',
+                color: sosCount > 0 ? p.error : p.primary,
+              ),
+              HduReadout('RATIONS ALLOCATED', '${app.claimCount}'),
+              HduReadout('LEDGER RECORDS', '$local'),
+              HduReadout('SYNC RECORDS (MESH)', '$synced'),
+              HduReadout(
+                'MAX HOP SEEN',
+                '${nodes.fold<int>(0, (int m, MeshNodeState n) => n.hopCount > m ? n.hopCount : m)}',
+              ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -215,6 +230,88 @@ class _FieldMapPanel extends StatelessWidget {
     );
   }
 }
+
+/// Who is on the mesh right now, named by their account identity instead of
+/// a bare hex node id. Anonymous nodes (still hearable, identity frame not
+/// yet received) are listed by id so nobody silently hides.
+class _PeersPanel extends StatelessWidget {
+  const _PeersPanel({required this.app});
+
+  final dynamic app;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = AppPalette.of(context);
+    final mesh = app.mesh;
+    final nodes = (mesh.nodes.values as Iterable<MeshNodeState>).toList()
+      ..sort((a, b) => a.lastSeenEpoch.compareTo(b.lastSeenEpoch));
+    return HudPanel(
+      title: 'PEERS',
+      child: nodes.isEmpty
+          ? const HduReadout('MESH', 'no peers yet — keep the radio on')
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                for (final n in nodes)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 2),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            n.username ?? 'UNKNOWN',
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: n.hasSos ? p.error : p.text,
+                              fontFamily: 'monospace',
+                              fontSize: 12,
+                              fontWeight: n.username != null
+                                  ? FontWeight.bold
+                                  : FontWeight.normal,
+                            ),
+                          ),
+                        ),
+                        Text(
+                          _roleTag(n.roleCode),
+                          style: TextStyle(
+                            color: p.textDim,
+                            fontFamily: 'monospace',
+                            fontSize: 10,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          '0x${n.nodeId.toRadixString(16).padLeft(4, '0').toUpperCase()}',
+                          style: TextStyle(
+                            color: p.textDim,
+                            fontFamily: 'monospace',
+                            fontSize: 10,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
+                          '${n.rssi}dBm',
+                          style: TextStyle(
+                            color: p.textDim,
+                            fontFamily: 'monospace',
+                            fontSize: 10,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+    );
+  }
+}
+
+String _roleTag(int? roleCode) => switch (roleCode) {
+  kRoleCitizen => 'CITIZEN',
+  kRoleOfficer => 'OFFICER',
+  kRoleAdmin => 'ADMIN',
+  _ => '·',
+};
 
 /// Air-gapped handoff: an officer scans this QR to enlist (FR-2.3).
 class _EnlistmentPanel extends StatelessWidget {

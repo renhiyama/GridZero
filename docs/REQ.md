@@ -206,6 +206,10 @@ $$\text{CurrentHash} = \text{SHA256}(\text{RecordData} \parallel \text{PrevHash}
 
 FR-3.4: Duplicate claims within a 24-hour window MUST trigger a local database constraint violation and raise an anti-fraud HUD alert.
 
+FR-3.5: Local ledger records MUST propagate to other terminals (HQ aggregation) over the BLE mesh via compact single-frame record packets and pull requests; receivers MUST absorb records into an aggregated sync table without rewriting the sender's hash chain, rejecting exact duplicates and cross-officer daily double-claims.
+
+FR-3.6: Every terminal MUST announce its account identity (username + role) over the mesh so peer lists and HQ dashboards show names rather than bare node ids.
+
 FR-4: Web Command HQ & Mesh Simulation (Judge Visualizer)
 
 FR-4.1: The Web target MUST render a top-level Command HQ dashboard displaying live aggregate mesh health, active SOS beacons, and supply allocation logs.
@@ -253,7 +257,9 @@ TYPE
 
 enum (uint8)
 
-0x01: SOS Beacon, 0x02: Relay Status, 0x03: Ledger Sync Request.
+0x01: SOS Beacon, 0x02: Relay Status, 0x03: Ledger Sync Request, 0x04: Identity, 0x05: Ledger Record.
+
+For types 0x04/0x05 the coordinate, triage and altitude bytes are reused as payload (no room in a 22-byte frame): identity carries the ≤12-char username across LAT/LON/ALT with role in TRIAGE and name length in FLAGS; ledger record packs citizen ID and officer ID (hex) into LAT/LON, epoch-seconds claim time into ALT, and the ration item index into TRIAGE.
 
 Bytes 2–3
 

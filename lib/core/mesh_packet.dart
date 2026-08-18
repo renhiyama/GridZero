@@ -3,6 +3,7 @@
 /// Layout (from docs/REQ.md section 2.1):
 ///   Byte 0     MAGIC       0xA5
 ///   Byte 1     TYPE        0x01 SOS | 0x02 Relay Status | 0x03 Ledger Sync Req
+///                          | 0x04 Identity | 0x05 Ledger Record
 ///   Bytes 2-3  SENDER_ID   uint16 node id hash suffix
 ///   Bytes 4-7  LATITUDE    int32 fixed point lat * 1e7
 ///   Bytes 8-11 LONGITUDE   int32 fixed point lon * 1e7
@@ -12,9 +13,19 @@
 ///   Byte 16    CRC8        over bytes 0..15
 ///   Byte 17    FLAGS       bit0 = SOS cleared marker
 ///   Bytes 18-21 ALTITUDE   int32 altitude in cm; 0x80000000 = no data
+///
+/// Identity (0x04) and ledger-record (0x05) frames repurpose bytes 4-21 as
+/// payload, since they carry no coordinates:
+///   0x04  [4-7][8-11][18-21] username ascii (≤12 chars)
+///         [12] role (1 citizen, 2 officer, 3 admin) [17] username length
+///   0x05  [4-7] citizenId hex [8-11] officerId hex [18-21] claimedAt epoch32
+///         [12] ration code index (0..4 | 0x0F other) [17] bit0 = record marker
 library;
 
+import 'dart:convert';
 import 'dart:typed_data';
+
+import 'package:crypto/crypto.dart';
 
 import 'crc8.dart';
 
@@ -26,10 +37,28 @@ const int maxSeverity = 5;
 /// Frame sentinel meaning "altitude unknown" (stored cm).
 const int _altUnknown = -2147483648;
 
+/// Role codes shared with app_state.dart. Kept here so the wire codec and the
+/// mesh node model agree without importing the whole app state.
+const int kRoleCitizen = 1;
+const int kRoleOfficer = 2;
+const int kRoleAdmin = 3;
+
+/// Ration items an officer can dispatch; the wire carries the index so a
+/// full string survives the 22-byte frame.
+const List<String> kRationCodes = [
+  'Rice',
+  'Water',
+  'Blanket',
+  'Medicine',
+  'Fuel',
+];
+
 enum MeshPacketType {
   sosBeacon(0x01),
   relayStatus(0x02),
-  ledgerSyncRequest(0x03);
+  ledgerSyncRequest(0x03),
+  identityAnnounce(0x04),
+  ledgerRecord(0x05);
 
   const MeshPacketType(this.value);
 
@@ -84,6 +113,37 @@ class TriageFlags {
   }
 }
 
+/// A ration claim squeezed into one 22-byte frame for store-and-forward
+/// ledger sync (FR-3.5 / FEAT-LEDG-02). Holds just the identity essentials;
+/// the sender's local hash-chain record keeps the full hashes.
+class CompactRecord {
+  CompactRecord({
+    required this.citizenId,
+    required this.officerId,
+    required this.claimedAt,
+    required this.rationCode,
+  });
+
+  final String citizenId;
+  final String officerId;
+  final int claimedAt;
+  final String rationCode;
+}
+
+/// Packs "CIT-XXXXXXXX" / "OFF-XXXXXXXX" into 4 bytes. Anything not in that
+/// shape hashes down to a stable 4-byte tag instead of corrupting the frame.
+int _idToBits(String id) {
+  final hex = id.split('-').last.toUpperCase();
+  if (hex.length == 8 && RegExp(r'^[0-9A-F]{8}$').hasMatch(hex)) {
+    return int.parse(hex, radix: 16);
+  }
+  final digest = sha256.convert(utf8.encode(id)).bytes;
+  return (digest[0] << 24) | (digest[1] << 16) | (digest[2] << 8) | digest[3];
+}
+
+String _bitsToId(String prefix, int bits) =>
+    '$prefix${(bits & 0xffffffff).toRadixString(16).padLeft(8, '0').toUpperCase()}';
+
 class MeshPacket {
   MeshPacket({
     required this.type,
@@ -96,6 +156,9 @@ class MeshPacket {
     this.hopCount = 0,
     this.flags = 0,
     this.altitudeCm,
+    this.identityUsername,
+    this.identityRole,
+    this.syncRecord,
   });
 
   final MeshPacketType type;
@@ -108,11 +171,20 @@ class MeshPacket {
   final int hopCount;
 
   /// Flags byte (index 17). Bit 0 = SOS-cleared marker so a deactivated SOS
-  /// propagates through the mesh instead of lingering until timeout.
+  /// propagates through the mesh instead of lingering until timeout. On
+  /// identity frames it carries the username length; on ledger records bit 0
+  /// marks the payload as a record (vs an empty sync request).
   final int flags;
 
   /// True when this sosBeacon announces the sender's SOS is now off.
   bool get sosCleared => (flags & 0x01) != 0;
+
+  /// Identity announcement payload (type == identityAnnounce).
+  final String? identityUsername;
+  final int? identityRole;
+
+  /// Ledger payload (type == ledgerRecord); null on a plain sync request.
+  final CompactRecord? syncRecord;
 
   /// Altitude in cm above sea level, or null when unknown.
   final int? altitudeCm;
@@ -130,31 +202,50 @@ class MeshPacket {
 
   Uint8List encode() {
     final out = Uint8List(meshPacketLength);
+    final bd = out.buffer.asByteData();
     out[0] = meshMagic;
     out[1] = type.value;
-    out.buffer.asByteData().setUint16(2, senderId, Endian.big);
-    out.buffer.asByteData().setInt32(
-      4,
-      _fixedPoint(latitude, 10000000),
-      Endian.big,
-    );
-    out.buffer.asByteData().setInt32(
-      8,
-      _fixedPoint(longitude, 10000000),
-      Endian.big,
-    );
-    out[12] = triage.value;
+    bd.setUint16(2, senderId, Endian.big);
+    switch (type) {
+      case MeshPacketType.identityAnnounce:
+        final name = (identityUsername ?? '')
+            .toUpperCase()
+            .codeUnits
+            .take(12)
+            .toList();
+        final buf = Uint8List(12)..setRange(0, name.length, name);
+        final bufBd = buf.buffer.asByteData();
+        bd.setInt32(4, bufBd.getInt32(0, Endian.big), Endian.big);
+        bd.setInt32(8, bufBd.getInt32(4, Endian.big), Endian.big);
+        bd.setInt32(18, bufBd.getInt32(8, Endian.big), Endian.big);
+        out[12] = identityRole ?? kRoleCitizen;
+        out[17] = name.length;
+      case MeshPacketType.ledgerRecord:
+        final rec = syncRecord;
+        bd.setInt32(4, _idToBits(rec!.citizenId), Endian.big);
+        bd.setInt32(8, _idToBits(rec.officerId), Endian.big);
+        bd.setUint32(18, rec.claimedAt, Endian.big);
+        final idx = kRationCodes.indexOf(rec.rationCode);
+        out[12] = idx >= 0 ? idx : 0x0f;
+        out[17] = 0x01;
+      case MeshPacketType.ledgerSyncRequest:
+      case MeshPacketType.sosBeacon:
+      case MeshPacketType.relayStatus:
+        bd.setInt32(4, _fixedPoint(latitude, 10000000), Endian.big);
+        bd.setInt32(8, _fixedPoint(longitude, 10000000), Endian.big);
+        out[12] = triage.value;
+        out[17] = flags;
+        bd.setInt32(18, altitudeCm ?? _altUnknown, Endian.big);
+    }
     out[13] = ((initialTtl & 0x0f) << 4) | (hopCount & 0x0f);
-    out.buffer.asByteData().setUint16(14, seq, Endian.big);
+    bd.setUint16(14, seq, Endian.big);
     out[16] = crc8(out.sublist(0, 16));
-    out[17] = flags;
-    out.buffer.asByteData().setInt32(18, altitudeCm ?? _altUnknown, Endian.big);
     return out;
   }
 
   factory MeshPacket.decode(Uint8List raw) {
     if (raw.length != meshPacketLength) {
-      throw const FormatException('packet length must be 18 bytes');
+      throw const FormatException('packet length must be 22 bytes');
     }
     if (raw[0] != meshMagic) {
       throw const FormatException('bad magic');
@@ -164,21 +255,88 @@ class MeshPacket {
       throw const FormatException('crc mismatch');
     }
     final bd = raw.buffer.asByteData();
-    return MeshPacket(
-      type: MeshPacketType.fromValue(raw[1]),
+    final type = MeshPacketType.fromValue(raw[1]);
+    final carriesCoords = switch (type) {
+      MeshPacketType.sosBeacon ||
+      MeshPacketType.relayStatus ||
+      MeshPacketType.ledgerSyncRequest => true,
+      _ => false,
+    };
+    final base = MeshPacket(
+      type: type,
       senderId: bd.getUint16(2, Endian.big),
-      latitude: bd.getInt32(4, Endian.big) / 10000000.0,
-      longitude: bd.getInt32(8, Endian.big) / 10000000.0,
-      triage: TriageFlags.fromValue(raw[12]),
+      latitude: 0,
+      longitude: 0,
+      triage: TriageFlags(),
+      seq: bd.getUint16(14, Endian.big),
       initialTtl: (raw[13] >> 4) & 0x0f,
       hopCount: raw[13] & 0x0f,
-      seq: bd.getUint16(14, Endian.big),
-      flags: raw[17],
-      altitudeCm: switch (bd.getInt32(18, Endian.big)) {
-        _altUnknown => null,
-        final int v => v,
-      },
+      flags: carriesCoords ? raw[17] : 0,
+      altitudeCm: null,
     );
+    switch (type) {
+      case MeshPacketType.identityAnnounce:
+        final buf = Uint8List(12);
+        final bufBd = buf.buffer.asByteData();
+        bufBd.setInt32(0, bd.getInt32(4, Endian.big), Endian.big);
+        bufBd.setInt32(4, bd.getInt32(8, Endian.big), Endian.big);
+        bufBd.setInt32(8, bd.getInt32(18, Endian.big), Endian.big);
+        final len = raw[17].clamp(0, 12);
+        return MeshPacket(
+          type: type,
+          senderId: base.senderId,
+          latitude: 0,
+          longitude: 0,
+          triage: TriageFlags(),
+          seq: base.seq,
+          initialTtl: base.initialTtl,
+          hopCount: base.hopCount,
+          flags: 0,
+          altitudeCm: null,
+          identityUsername: String.fromCharCodes(buf.sublist(0, len)),
+          identityRole: raw[12],
+        );
+      case MeshPacketType.ledgerRecord:
+        final code = raw[12];
+        return MeshPacket(
+          type: type,
+          senderId: base.senderId,
+          latitude: 0,
+          longitude: 0,
+          triage: TriageFlags(),
+          seq: base.seq,
+          initialTtl: base.initialTtl,
+          hopCount: base.hopCount,
+          flags: 0x01,
+          altitudeCm: null,
+          syncRecord: CompactRecord(
+            citizenId: _bitsToId('CIT-', bd.getInt32(4, Endian.big)),
+            officerId: _bitsToId('OFF-', bd.getInt32(8, Endian.big)),
+            claimedAt: bd.getUint32(18, Endian.big),
+            rationCode: code == 0x0f
+                ? 'Other'
+                : (code < kRationCodes.length ? kRationCodes[code] : 'Other'),
+          ),
+        );
+      case MeshPacketType.ledgerSyncRequest:
+      case MeshPacketType.sosBeacon:
+      case MeshPacketType.relayStatus:
+        return MeshPacket(
+          type: type,
+          senderId: base.senderId,
+          latitude: bd.getInt32(4, Endian.big) / 10000000.0,
+          longitude: bd.getInt32(8, Endian.big) / 10000000.0,
+          triage: TriageFlags.fromValue(raw[12]),
+          seq: base.seq,
+          initialTtl: base.initialTtl,
+          hopCount: base.hopCount,
+          flags: base.flags,
+          altitudeCm: switch (bd.getInt32(18, Endian.big)) {
+            _altUnknown => null,
+            final int v => v,
+          },
+        );
+    }
   }
 
   /// Duplicate frame identifier: sender + sequence.

@@ -149,6 +149,13 @@ class MeshController {
   /// Fired when a peer's SOS clears (explicit clear frame or 90s timeout).
   Stream<MeshNodeState> get sosEnded => _sosEnded.stream;
 
+  /// Called by the app layer with a received ledger record so it can merge
+  /// it into the central store (FR-3.5 store-and-forward sync).
+  void Function(CompactRecord record, int fromNodeId)? onLedgerRecord;
+
+  /// Called when a peer (or a relayed request) asks for our unsynced records.
+  void Function(int fromNodeId)? onLedgerSyncRequest;
+
   Map<int, MeshNodeState> get nodes => Map.unmodifiable(_nodes);
 
   /// Number of frames seen so far (telemetry).
@@ -219,6 +226,51 @@ class MeshController {
     return adapter.broadcast(packet);
   }
 
+  /// Broadcasts this node's account identity so peers can name us instead of
+  /// showing a bare hex node id.
+  Future<void> broadcastIdentity(String username, int roleCode) {
+    final packet = MeshPacket(
+      type: MeshPacketType.identityAnnounce,
+      senderId: nodeId,
+      latitude: 0,
+      longitude: 0,
+      triage: TriageFlags(),
+      seq: (_seq = (_seq + 1) & 0xffff),
+      identityUsername: username,
+      identityRole: roleCode,
+    );
+    _dedup.insert(packet.dedupKey);
+    return adapter.broadcast(packet);
+  }
+
+  /// Pull request: asks nearby (and, via relay, far) nodes to push back their
+  /// unsynced ledger records.
+  Future<void> broadcastLedgerSyncRequest() {
+    final packet = _newPacket(
+      MeshPacketType.ledgerSyncRequest,
+      triage: TriageFlags(),
+      latitude: gpsFix ? gpsLatitude! : 0,
+      longitude: gpsFix ? gpsLongitude! : 0,
+    );
+    _dedup.insert(packet.dedupKey);
+    return adapter.broadcast(packet);
+  }
+
+  /// Floods one compact ledger record to the mesh for store-and-forward sync.
+  Future<void> broadcastLedgerRecord(CompactRecord record) {
+    final packet = MeshPacket(
+      type: MeshPacketType.ledgerRecord,
+      senderId: nodeId,
+      latitude: 0,
+      longitude: 0,
+      triage: TriageFlags(),
+      seq: (_seq = (_seq + 1) & 0xffff),
+      syncRecord: record,
+    );
+    _dedup.insert(packet.dedupKey);
+    return adapter.broadcast(packet);
+  }
+
   MeshPacket _newPacket(
     MeshPacketType type, {
     required TriageFlags triage,
@@ -264,6 +316,12 @@ class MeshController {
       } else if (!wasSos && !isOwn) {
         _sosStarted.add(node);
       }
+    }
+
+    if (p.type == MeshPacketType.ledgerRecord) {
+      onLedgerRecord?.call(p.syncRecord!, p.senderId);
+    } else if (p.type == MeshPacketType.ledgerSyncRequest && !isOwn) {
+      onLedgerSyncRequest?.call(p.senderId);
     }
 
     // FR-1.3: relay while TTL remains and the frame is not ours.

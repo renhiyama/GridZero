@@ -6,6 +6,7 @@ import 'ledger_store.dart';
 
 class MemoryLedgerStore implements LedgerStore {
   final List<LedgerRecord> _records = [];
+  final List<LedgerRecord> _syncRecords = [];
   final Map<int, Map<String, Object?>> _nodes = {};
 
   @override
@@ -14,6 +15,7 @@ class MemoryLedgerStore implements LedgerStore {
   @override
   Future<void> wipe() async {
     _records.clear();
+    _syncRecords.clear();
     _nodes.clear();
   }
 
@@ -54,6 +56,42 @@ class MemoryLedgerStore implements LedgerStore {
     }
     _records.add(record);
     return ClaimResult(ClaimStatus.granted, record: record);
+  }
+
+  @override
+  Future<List<LedgerRecord>> pendingRecords() async =>
+      _records.where((r) => r.syncStatus == 0).toList();
+
+  @override
+  Future<void> markSynced(List<String> recordIds) async {
+    for (final id in recordIds) {
+      for (final r in _records) {
+        if (r.recordId == id) r.syncStatus = 1;
+      }
+    }
+  }
+
+  @override
+  Future<int> syncRecordsCount() async => _syncRecords.length;
+
+  @override
+  Future<SyncResult> mergeRecord({
+    required LedgerRecord record,
+    required int receivedFrom,
+  }) async {
+    if (_syncRecords.any((r) => r.recordId == record.recordId)) {
+      return const SyncResult(SyncStatus.duplicate);
+    }
+    final day = record.claimedAt ~/ 86400;
+    final dup = _syncRecords.any(
+      (r) =>
+          r.citizenId == record.citizenId &&
+          r.rationCode == record.rationCode &&
+          r.claimedAt ~/ 86400 == day,
+    );
+    if (dup) return const SyncResult(SyncStatus.duplicate);
+    _syncRecords.add(record);
+    return SyncResult(SyncStatus.merged);
   }
 
   @override

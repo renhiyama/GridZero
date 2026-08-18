@@ -25,6 +25,22 @@ CREATE TABLE IF NOT EXISTS known_mesh_nodes (
     triage_severity INTEGER,
     last_seen_epoch INTEGER
 );
+
+-- Records absorbed from other devices' chains via mesh sync (FR-3.5).
+-- Original hashes are kept verbatim so a foreign chain stays auditable;
+-- the local chain is never rewritten.
+CREATE TABLE IF NOT EXISTS sync_records (
+    record_id TEXT PRIMARY KEY,
+    citizen_id TEXT NOT NULL,
+    ration_code TEXT NOT NULL,
+    claimed_at INTEGER NOT NULL,
+    officer_id TEXT NOT NULL,
+    received_from INTEGER NOT NULL,
+    received_at INTEGER NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_daily_claim
+ON sync_records (citizen_id, ration_code, (claimed_at / 86400));
 ''';
 
 class SqliteLedgerStore implements LedgerStore {
@@ -37,8 +53,10 @@ class SqliteLedgerStore implements LedgerStore {
     final db = await factory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 1,
+        version: 2,
         onCreate: (db, _) => db.execute(kLedgerSchema),
+        // v1 DBs predate sync_records; CREATE IF NOT EXISTS upgrades in place.
+        onUpgrade: (db, _, _) => db.execute(kLedgerSchema),
       ),
     );
     return SqliteLedgerStore(db, path);
@@ -74,6 +92,62 @@ class SqliteLedgerStore implements LedgerStore {
   Future<int> recordsCount() async {
     final rows = await _db.rawQuery('SELECT COUNT(*) AS c FROM ledger_records');
     return rows.first['c'] as int;
+  }
+
+  @override
+  Future<List<LedgerRecord>> pendingRecords() async {
+    final rows = await _db.query(
+      'ledger_records',
+      where: 'sync_status = 0',
+      orderBy: 'claimed_at ASC',
+    );
+    return rows.map(LedgerRecord.fromMap).toList();
+  }
+
+  @override
+  Future<void> markSynced(List<String> recordIds) async {
+    if (recordIds.isEmpty) return;
+    for (final id in recordIds) {
+      await _db.update(
+        'ledger_records',
+        {'sync_status': 1},
+        where: 'record_id = ?',
+        whereArgs: [id],
+      );
+    }
+  }
+
+  @override
+  Future<int> syncRecordsCount() async {
+    final rows = await _db.rawQuery('SELECT COUNT(*) AS c FROM sync_records');
+    return rows.first['c'] as int;
+  }
+
+  @override
+  Future<SyncResult> mergeRecord({
+    required LedgerRecord record,
+    required int receivedFrom,
+  }) async {
+    try {
+      final count = await _db.insert('sync_records', {
+        'record_id': record.recordId,
+        'citizen_id': record.citizenId,
+        'ration_code': record.rationCode,
+        'claimed_at': record.claimedAt,
+        'officer_id': record.officerId,
+        'received_from': receivedFrom,
+        'received_at': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      }, conflictAlgorithm: ConflictAlgorithm.ignore);
+      if (count == 0) {
+        return SyncResult(
+          SyncStatus.duplicate,
+          message: 'already known or daily double-claim',
+        );
+      }
+      return SyncResult(SyncStatus.merged);
+    } on DatabaseException catch (e) {
+      return SyncResult(SyncStatus.duplicate, message: e.toString());
+    }
   }
 
   @override

@@ -318,13 +318,15 @@ class MeshController {
       }
     }
 
-    if (p.type == MeshPacketType.ledgerRecord) {
+    if (p.type == MeshPacketType.ledgerRecord && p.syncRecord != null) {
       onLedgerRecord?.call(p.syncRecord!, p.senderId);
     } else if (p.type == MeshPacketType.ledgerSyncRequest && !isOwn) {
       onLedgerSyncRequest?.call(p.senderId);
     }
 
-    // FR-1.3: relay while TTL remains and the frame is not ours.
+    // FR-1.3: relay while TTL remains and the frame is not ours. Payload
+    // frames (identity / ledger record) must carry their payload along or
+    // the next hop's encode() null-checks crash on the missing field.
     if (p.ttl > 1 && p.senderId != nodeId) {
       final relay = MeshPacket(
         type: p.type,
@@ -337,6 +339,9 @@ class MeshController {
         hopCount: p.hopCount + 1,
         flags: p.flags,
         altitudeCm: p.altitudeCm,
+        identityUsername: p.identityUsername,
+        identityRole: p.identityRole,
+        syncRecord: p.syncRecord,
       );
       framesRelayed++;
       adapter.broadcast(relay);

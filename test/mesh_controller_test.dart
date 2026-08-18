@@ -331,10 +331,63 @@ void main() {
       );
       await Future<void>.delayed(const Duration(milliseconds: 20));
 
-      expect(records, hasLength(1));
-      expect(records.single.citizenId, 'CIT-0A3F0FAB');
-      expect(requests, [0x2222]);
-      await ctrl.stop();
-    },
-  );
+expect(records, hasLength(1));
+    expect(records.single.citizenId, 'CIT-0A3F0FAB');
+    expect(requests, [0x2222]);
+    await ctrl.stop();
+  });
+
+  test('payload frames relay with payload intact (no null crash)', () async {
+    final adapter = FakeMeshAdapter();
+    final ctrl = MeshController(nodeId: 0x1111, adapter: adapter);
+    await ctrl.start();
+
+    await adapter.injectRemote(
+      MeshPacket(
+        type: MeshPacketType.ledgerRecord,
+        senderId: 0x2222,
+        latitude: 0,
+        longitude: 0,
+        triage: TriageFlags(),
+        seq: 1,
+        syncRecord: CompactRecord(
+          citizenId: 'CIT-0A3F0FAB',
+          officerId: 'OFF-00BEEFA1',
+          claimedAt: 1700000000,
+          rationCode: 'Rice',
+        ),
+      ),
+    );
+    await adapter.injectRemote(
+      MeshPacket(
+        type: MeshPacketType.identityAnnounce,
+        senderId: 0x3333,
+        latitude: 0,
+        longitude: 0,
+        triage: TriageFlags(),
+        seq: 2,
+        identityUsername: 'REN',
+        identityRole: kRoleCitizen,
+      ),
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+
+    final relayed = adapter.broadcasted
+        .where((p) => p.senderId != ctrl.nodeId)
+        .toList();
+    final fwd = relayed.firstWhere(
+      (p) => p.type == MeshPacketType.ledgerRecord,
+    );
+    expect(fwd.syncRecord!.citizenId, 'CIT-0A3F0FAB');
+    expect(fwd.syncRecord!.rationCode, 'Rice');
+    expect(fwd.hopCount, 1);
+
+    final idFwd = relayed.firstWhere(
+      (p) => p.type == MeshPacketType.identityAnnounce,
+    );
+    expect(idFwd.identityUsername, 'REN');
+    expect(idFwd.identityRole, kRoleCitizen);
+    expect(idFwd.hopCount, 1);
+    await ctrl.stop();
+  });
 }

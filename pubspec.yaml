@@ -54,6 +54,7 @@ dependencies:
   bluez: ^0.8.3
   dbus: ^0.7.14
   flutter_local_notifications: ^22.3.0
+  flutter_compass: ^0.8.1
 
 dev_dependencies:
   flutter_test:

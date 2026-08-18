@@ -10,6 +10,7 @@ class MeshNodeState {
   final int nodeId;
   double latitude = 0;
   double longitude = 0;
+  double? altitudeM;
   int severity = 1;
   int rssi = -70;
   int hopCount = 0;
@@ -26,6 +27,7 @@ class MeshNodeState {
     final p = rx.packet;
     latitude = p.latitude;
     longitude = p.longitude;
+    if (p.altitudeM != null) altitudeM = p.altitudeM;
     severity = p.triage.severity;
     rssi = rx.rssi;
     hopCount = p.hopCount;

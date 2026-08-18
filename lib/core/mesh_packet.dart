@@ -1,4 +1,4 @@
-/// AapadSetu 18-byte BLE mesh frame codec.
+/// AapadSetu 22-byte BLE mesh frame codec.
 ///
 /// Layout (from docs/REQ.md section 2.1):
 ///   Byte 0     MAGIC       0xA5
@@ -10,7 +10,8 @@
 ///   Byte 13    TTL_HOP     [7..4] initial TTL, [3..0] current hop count
 ///   Bytes 14-15 SEQ_NUM    uint16 monotonic counter
 ///   Byte 16    CRC8        over bytes 0..15
-///   Byte 17    RESERVED    dynamic extension byte
+///   Byte 17    FLAGS       bit0 = SOS cleared marker
+///   Bytes 18-21 ALTITUDE   int32 altitude in cm; 0x80000000 = no data
 library;
 
 import 'dart:typed_data';
@@ -18,9 +19,12 @@ import 'dart:typed_data';
 import 'crc8.dart';
 
 const int meshMagic = 0xA5;
-const int meshPacketLength = 18;
+const int meshPacketLength = 22;
 const int defaultInitialTtl = 5;
 const int maxSeverity = 5;
+
+/// Frame sentinel meaning "altitude unknown" (stored cm).
+const int _altUnknown = -2147483648;
 
 enum MeshPacketType {
   sosBeacon(0x01),
@@ -91,6 +95,7 @@ class MeshPacket {
     this.initialTtl = defaultInitialTtl,
     this.hopCount = 0,
     this.flags = 0,
+    this.altitudeCm,
   });
 
   final MeshPacketType type;
@@ -108,6 +113,12 @@ class MeshPacket {
 
   /// True when this sosBeacon announces the sender's SOS is now off.
   bool get sosCleared => (flags & 0x01) != 0;
+
+  /// Altitude in cm above sea level, or null when unknown.
+  final int? altitudeCm;
+
+  /// Altitude in metres, or null when unknown.
+  double? get altitudeM => altitudeCm == null ? null : altitudeCm! / 100.0;
 
   /// Remaining hops before the frame must be dropped.
   int get ttl => initialTtl - hopCount;
@@ -137,6 +148,11 @@ class MeshPacket {
     out.buffer.asByteData().setUint16(14, seq, Endian.big);
     out[16] = crc8(out.sublist(0, 16));
     out[17] = flags;
+    out.buffer.asByteData().setInt32(
+      18,
+      altitudeCm ?? _altUnknown,
+      Endian.big,
+    );
     return out;
   }
 
@@ -162,6 +178,10 @@ class MeshPacket {
       hopCount: raw[13] & 0x0f,
       seq: bd.getUint16(14, Endian.big),
       flags: raw[17],
+      altitudeCm: switch (bd.getInt32(18, Endian.big)) {
+        _altUnknown => null,
+        final int v => v,
+      },
     );
   }
 

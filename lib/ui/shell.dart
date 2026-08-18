@@ -2,14 +2,18 @@
 /// Settings.
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../app_scope.dart';
 import '../core/app_state.dart';
+import '../core/mesh/mesh_node.dart';
 import 'citizen_screen.dart';
 import 'hq_screen.dart';
 import 'hud_theme.dart';
 import 'officer_screen.dart';
+import 'radar_screen.dart';
 import 'settings_screen.dart';
 
 class ModeShell extends StatefulWidget {
@@ -61,7 +65,12 @@ class _ModeShellState extends State<ModeShell> {
       ('SETTINGS', Icons.settings_outlined),
     ];
     return Scaffold(
-      body: pages[_index],
+      body: Stack(
+        children: [
+          Positioned.fill(child: pages[_index]),
+          _SosAlertBanner(app: app),
+        ],
+      ),
       bottomNavigationBar: Container(
         decoration: BoxDecoration(
           border: Border(top: BorderSide(color: p.primaryDim)),
@@ -89,6 +98,127 @@ class _ModeShellState extends State<ModeShell> {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// In-app SOS alert: a persistent red bar across every tab while any peer is
+/// actively beaconing. Tap opens the responder radar; X silences the current
+/// episode (a fresh SOS from a new node re-alerts).
+class _SosAlertBanner extends StatefulWidget {
+  const _SosAlertBanner({required this.app});
+
+  final AppState app;
+
+  @override
+  State<_SosAlertBanner> createState() => _SosAlertBannerState();
+}
+
+class _SosAlertBannerState extends State<_SosAlertBanner> {
+  final Set<int> _dismissed = {};
+  StreamSubscription<MeshNodeState>? _startedSub;
+  StreamSubscription<MeshNodeState>? _endedSub;
+
+  @override
+  void initState() {
+    super.initState();
+    // A brand-new SOS re-alerts even if a previous one was dismissed.
+    _startedSub = widget.app.mesh.sosStarted
+        .listen((n) => setState(() => _dismissed.remove(n.nodeId)));
+    _endedSub = widget.app.mesh.sosEnded
+        .listen((n) => setState(() => _dismissed.remove(n.nodeId)));
+  }
+
+  @override
+  void dispose() {
+    _startedSub?.cancel();
+    _endedSub?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final p = AppPalette.of(context);
+    final mesh = widget.app.mesh;
+    return StreamBuilder<Map<int, MeshNodeState>>(
+      stream: mesh.nodeUpdates,
+      initialData: mesh.nodes,
+      builder: (context, snap) {
+        final active = (snap.data?.values ?? <MeshNodeState>[])
+            .where((n) => n.hasSos && !_dismissed.contains(n.nodeId))
+            .toList()
+          ..sort((a, b) => b.severity.compareTo(a.severity));
+        final top = active.isEmpty ? null : active.first;
+        return Positioned(
+          top: 0,
+          left: 0,
+          right: 0,
+          child: top == null
+              // Must stay Positioned so it never becomes the Stack's sizing
+              // child: a loose Stack collapses to the biggest non-positioned
+              // child, which would crush the page to 0x0.
+              ? const SizedBox.shrink()
+              : Material(
+                  color: p.error,
+                  child: SafeArea(
+                    bottom: false,
+                    child: InkWell(
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => RadarScreen(nodeId: top.nodeId),
+                        ),
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 10,
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(
+                              Icons.sos,
+                              color: Colors.white,
+                              size: 20,
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                active.length == 1
+                                    ? 'SOS ACTIVE — NODE '
+                                        '${top.nodeId.toRadixString(16).toUpperCase()} · '
+                                        'TRIAGE ${top.severity} — TAP TO TRACK'
+                                    : '${active.length} SOS ACTIVE — '
+                                        'TOP TRIAGE ${top.severity} — '
+                                        'TAP TO TRACK',
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontFamily: 'monospace',
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.bold,
+                                  letterSpacing: 0.5,
+                                ),
+                              ),
+                            ),
+                            IconButton(
+                              icon: const Icon(
+                                Icons.close,
+                                color: Colors.white,
+                              ),
+                              onPressed: () => setState(
+                                () => _dismissed.addAll(
+                                  active.map((n) => n.nodeId),
+                                ),
+                              ),
+                              visualDensity: VisualDensity.compact,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+        );
+      },
     );
   }
 }

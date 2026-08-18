@@ -4,7 +4,7 @@ import 'package:aapadsetu/core/mesh_packet.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  test('18-byte frame roundtrips through encode/decode', () {
+  test('22-byte frame roundtrips through encode/decode', () {
     final p = MeshPacket(
       type: MeshPacketType.sosBeacon,
       senderId: 0xBEEF,
@@ -12,6 +12,7 @@ void main() {
       longitude: 72.8777000,
       triage: TriageFlags(medical: true, trapped: true, severity: 5),
       seq: 42,
+      altitudeCm: 12345,
     );
     final raw = p.encode();
     expect(raw.length, meshPacketLength);
@@ -27,6 +28,20 @@ void main() {
     expect(decoded.seq, 42);
     expect(decoded.ttl, defaultInitialTtl);
     expect(decoded.isExpired, isFalse);
+    expect(decoded.altitudeCm, 12345);
+    expect(decoded.altitudeM, closeTo(123.45, 1e-9));
+  });
+
+  test('unknown altitude decodes as null', () {
+    final raw = MeshPacket(
+      type: MeshPacketType.relayStatus,
+      senderId: 0x1,
+      latitude: 0,
+      longitude: 0,
+      triage: TriageFlags(),
+      seq: 1,
+    ).encode();
+    expect(MeshPacket.decode(raw).altitudeM, isNull);
   });
 
   test('tampered payload fails CRC', () {

@@ -31,17 +31,24 @@ class MeshController {
   bool gpsFix = false;
   double? gpsLatitude;
   double? gpsLongitude;
+  double? gpsAltitude;
 
-  void setGpsFix({required double latitude, required double longitude}) {
+  void setGpsFix({
+    required double latitude,
+    required double longitude,
+    double? altitude,
+  }) {
     gpsFix = true;
     gpsLatitude = latitude;
     gpsLongitude = longitude;
+    gpsAltitude = altitude;
   }
 
   void clearGpsFix() {
     gpsFix = false;
     gpsLatitude = null;
     gpsLongitude = null;
+    gpsAltitude = null;
   }
 
   /// Raw peer coordinates broadcast with each frame; 0,0 means "no fix".
@@ -179,6 +186,7 @@ class MeshController {
     required TriageFlags triage,
     double? latitude,
     double? longitude,
+    double? altitude,
     bool cleared = false,
   }) {
     final packet = _newPacket(
@@ -186,6 +194,7 @@ class MeshController {
       triage: triage,
       latitude: latitude ?? (gpsFix ? gpsLatitude! : 0),
       longitude: longitude ?? (gpsFix ? gpsLongitude! : 0),
+      altitude: altitude ?? gpsAltitude,
       flags: cleared ? 1 : 0,
     );
     return broadcast(packet);
@@ -204,6 +213,7 @@ class MeshController {
       triage: TriageFlags(),
       latitude: gpsFix ? gpsLatitude! : 0,
       longitude: gpsFix ? gpsLongitude! : 0,
+      altitude: gpsAltitude,
     );
     _dedup.insert(packet.dedupKey);
     return adapter.broadcast(packet);
@@ -214,6 +224,7 @@ class MeshController {
     required TriageFlags triage,
     required double latitude,
     required double longitude,
+    double? altitude,
     int flags = 0,
   }) {
     _seq = (_seq + 1) & 0xffff;
@@ -225,6 +236,7 @@ class MeshController {
       triage: triage,
       seq: _seq,
       flags: flags,
+      altitudeCm: altitude == null ? null : (altitude * 100).round(),
     );
   }
 
@@ -266,6 +278,7 @@ class MeshController {
         initialTtl: p.initialTtl,
         hopCount: p.hopCount + 1,
         flags: p.flags,
+        altitudeCm: p.altitudeCm,
       );
       framesRelayed++;
       adapter.broadcast(relay);

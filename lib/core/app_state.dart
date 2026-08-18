@@ -115,12 +115,16 @@ class AppState extends ChangeNotifier {
       }
       final pos = await Geolocator.getCurrentPosition(
         locationSettings: const LocationSettings(
-          // GPS (not cell/wifi): medium accuracy lands you a road off.
+          // High accuracy (GPS, not cell/wifi): medium put users a road off.
           accuracy: LocationAccuracy.high,
           timeLimit: Duration(seconds: 10),
         ),
       );
-      mesh.setGpsFix(latitude: pos.latitude, longitude: pos.longitude);
+      mesh.setGpsFix(
+        latitude: pos.latitude,
+        longitude: pos.longitude,
+        altitude: pos.altitude,
+      );
       notifyListeners();
     } catch (_) {
       // no fix (e.g. denied, no satellites); keep the no-GPS fallback

@@ -176,7 +176,7 @@ FR-1: BLE Mesh Networking & Protocol Rules
 
 FR-1.1: Mobile and desktop terminals MUST run concurrent BLE Peripheral (advertising) and Central (scanning) modes.
 
-FR-1.2: Packets MUST be strictly bounded to an 18-byte binary payload to fit within legacy BLE Advertising Data frames ($31\text{ bytes}$ max limit minus flags and headers).
+FR-1.2: Packets MUST be strictly bounded to a 22-byte binary payload to fit within legacy BLE Advertising Data frames ($31\text{ bytes}$ max limit minus flags and headers).
 
 FR-1.3: Every packet MUST contain a 1-byte Time-To-Live (TTL) counter initialized to $N=5$. Each relay hop MUST decrement TTL by 1. Packets with $\text{TTL} = 0$ MUST be dropped.
 
@@ -313,11 +313,19 @@ Polynomial checksum ($x^8 + x^2 + x + 1$) across bytes 0–15.
 
 Byte 17
 
-RESERVED
+FLAGS
 
 uint8
 
-Padding / Future dynamic extension byte.
+Bitfield: bit 0 = SOS-cleared marker (deactivated SOS propagation).
+
+Bytes 18–21
+
+ALTITUDE
+
+int32
+
+Fixed-point altitude in cm above sea level; `0x80000000` = no data.
 
 2.2 SQLite Local Ledger Schema (ledger_db.sql)
 

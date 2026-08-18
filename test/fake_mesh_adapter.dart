@@ -10,6 +10,9 @@ import 'package:aapadsetu/core/mesh_packet.dart';
 class FakeMeshAdapter implements MeshAdapter {
   final _rx = StreamController<MeshRxPacket>.broadcast();
 
+  /// Every packet handed to [broadcast], for asserting relay behaviour.
+  final List<MeshPacket> broadcasted = [];
+
   @override
   String get name => 'FAKE';
 
@@ -27,6 +30,7 @@ class FakeMeshAdapter implements MeshAdapter {
 
   @override
   Future<void> broadcast(MeshPacket packet) async {
+    broadcasted.add(packet);
     _rx.add(MeshRxPacket(packet: packet));
   }
 

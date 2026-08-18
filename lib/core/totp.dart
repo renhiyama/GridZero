@@ -14,7 +14,8 @@ import 'package:crypto/crypto.dart';
 const int totpWindowSeconds = 30;
 const int totpToleranceWindows = 1;
 
-int totpTimeWindow(DateTime now) => now.millisecondsSinceEpoch ~/ 1000 ~/ totpWindowSeconds;
+int totpTimeWindow(DateTime now) =>
+    now.millisecondsSinceEpoch ~/ 1000 ~/ totpWindowSeconds;
 
 /// Full-length token as 16 hex chars (first 8 bytes of the HMAC).
 String totpToken({
@@ -27,7 +28,10 @@ String totpToken({
   window.setInt64(0, timeWindow, Endian.big);
   final hmac = Hmac(sha256, key);
   final digest = hmac.convert(
-    Uint8List.fromList([...window.buffer.asUint8List(), ...utf8.encode(citizenId)]),
+    Uint8List.fromList([
+      ...window.buffer.asUint8List(),
+      ...utf8.encode(citizenId),
+    ]),
   );
   return digest.toString().substring(0, 32);
 }
@@ -39,8 +43,16 @@ bool totpVerify({
   required DateTime now,
 }) {
   final window = totpTimeWindow(now);
-  for (var w = window - totpToleranceWindows; w <= window + totpToleranceWindows; w++) {
-    if (totpToken(citizenId: citizenId, citizenKey: citizenKey, timeWindow: w) ==
+  for (
+    var w = window - totpToleranceWindows;
+    w <= window + totpToleranceWindows;
+    w++
+  ) {
+    if (totpToken(
+          citizenId: citizenId,
+          citizenKey: citizenKey,
+          timeWindow: w,
+        ) ==
         claimedToken) {
       return true;
     }

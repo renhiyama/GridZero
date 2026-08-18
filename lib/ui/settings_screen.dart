@@ -1,5 +1,6 @@
-/// Settings tab: theme (light/dark/system), Material You accent selection,
-/// mesh transport + permissions, identity and protocol readouts.
+/// Settings tab: theme (light/dark/system), accent selection, mesh link status
+/// and identity. Deliberately minimal — no radio/transport jargon for the end
+/// user; technical detail lives in the HUD, not here.
 library;
 
 import 'package:flutter/material.dart';
@@ -16,25 +17,8 @@ const _seedSwatches = <(String, Color)>[
   ('BLUE', Color(0xFF448AFF)),
 ];
 
-class SettingsScreen extends StatefulWidget {
+class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key});
-
-  @override
-  State<SettingsScreen> createState() => _SettingsScreenState();
-}
-
-class _SettingsScreenState extends State<SettingsScreen> {
-  String _permStatus = '…';
-  bool _permInitialized = false;
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    if (!_permInitialized) {
-      _permInitialized = true;
-      _permStatus = AppScope.of(context).mesh.adapter.status;
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -66,11 +50,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      Text('THEME MODE',
-                          style: TextStyle(
-                              color: p.textDim,
-                              fontFamily: 'monospace',
-                              fontSize: 11)),
+                      Text(
+                        'THEME',
+                        style: TextStyle(
+                          color: p.textDim,
+                          fontFamily: 'monospace',
+                          fontSize: 11,
+                        ),
+                      ),
                       const SizedBox(height: 6),
                       SegmentedButton<ThemeMode>(
                         segments: const [
@@ -91,44 +78,48 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           ),
                         ],
                         selected: {app.themeMode},
-                        onSelectionChanged: (s) =>
-                            app.setThemeMode(s.first),
+                        onSelectionChanged: (s) => app.setThemeMode(s.first),
                       ),
                       const SizedBox(height: 14),
                       Row(
                         children: [
-                          Text('MATERIAL YOU ACCENT (SYSTEM)',
+                          Expanded(
+                            child: Text(
+                              'USE DEVICE ACCENT COLOR',
                               style: TextStyle(
-                                  color: p.textDim,
-                                  fontFamily: 'monospace',
-                                  fontSize: 11)),
-                          const Spacer(),
+                                color: p.textDim,
+                                fontFamily: 'monospace',
+                                fontSize: 11,
+                              ),
+                            ),
+                          ),
                           Switch(
                             value: app.useSystemDynamic,
                             activeThumbColor: p.primary,
-                            onChanged: app.useSystemDynamic
-                                ? (v) => app.setUseSystemDynamic(v)
-                                : null,
+                            onChanged: (v) => app.setUseSystemDynamic(v),
                           ),
                         ],
                       ),
                       if (!app.useSystemDynamic) ...[
                         const SizedBox(height: 8),
-                        Text('PRIMARY ACCENT',
-                            style: TextStyle(
-                                color: p.textDim,
-                                fontFamily: 'monospace',
-                                fontSize: 11)),
+                        Text(
+                          'ACCENT COLOR',
+                          style: TextStyle(
+                            color: p.textDim,
+                            fontFamily: 'monospace',
+                            fontSize: 11,
+                          ),
+                        ),
                         const SizedBox(height: 8),
                         Wrap(
                           spacing: 8,
                           children: [
                             for (final (name, color) in _seedSwatches)
                               Tooltip(
-                                message: '$name (${color.toARGB32().toRadixString(16).toUpperCase()})',
+                                message:
+                                    '$name (${color.toARGB32().toRadixString(16).toUpperCase()})',
                                 child: InkWell(
-                                  onTap: () =>
-                                      app.setSeedColor(color),
+                                  onTap: () => app.setSeedColor(color),
                                   child: Container(
                                     width: 34,
                                     height: 34,
@@ -142,8 +133,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                                       ),
                                     ),
                                     child: app.seedColor == color
-                                        ? Icon(Icons.check,
-                                            color: p.text, size: 18)
+                                        ? Icon(
+                                            Icons.check,
+                                            color: p.text,
+                                            size: 18,
+                                          )
                                         : null,
                                   ),
                                 ),
@@ -156,45 +150,40 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
                 const SizedBox(height: 12),
                 HudPanel(
-                  title: 'MESH UPLINK',
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Row(
+                  title: 'MESH LINK',
+                  child: ListenableBuilder(
+                    listenable: app,
+                    builder: (context, _) {
+                      final nodes = app.mesh.nodes.length;
+                      final ok = nodes > 0;
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
-                          Text('SIMULATED TRANSPORT',
-                              style: TextStyle(
-                                  color: p.textDim,
+                          Row(
+                            children: [
+                              Container(
+                                width: 10,
+                                height: 10,
+                                color: ok ? p.primary : p.error,
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                ok ? 'MESH LINK: OK' : 'MESH LINK: SCANNING…',
+                                style: TextStyle(
+                                  color: ok ? p.primary : p.error,
                                   fontFamily: 'monospace',
-                                  fontSize: 11)),
-                          const Spacer(),
-                          Switch(
-                            value: app.useSimulator,
-                            activeThumbColor: p.primary,
-                            onChanged: (v) {
-                              app.setUseSimulator(v);
-                              _permStatus = app.mesh.adapter.status;
-                            },
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.bold,
+                                  letterSpacing: 1,
+                                ),
+                              ),
+                            ],
                           ),
+                          const SizedBox(height: 6),
+                          HduReadout('NEARBY NODES', '$nodes'),
                         ],
-                      ),
-                      const SizedBox(height: 6),
-                      HduReadout('ADAPTER', app.mesh.adapter.name),
-                      const SizedBox(height: 2),
-                      HduReadout('STATUS', _permStatus),
-                      const SizedBox(height: 10),
-                      FilledButton.icon(
-                        onPressed: () async {
-                          final status = await app.requestMeshPermissions();
-                          if (!mounted) return;
-                          setState(() => _permStatus = status);
-                        },
-                        icon: const Icon(Icons.lock_open),
-                        label: const Text('REQUEST PERMISSIONS',
-                            style: TextStyle(
-                                fontFamily: 'monospace', letterSpacing: 1)),
-                      ),
-                    ],
+                      );
+                    },
                   ),
                 ),
                 const SizedBox(height: 12),
@@ -203,38 +192,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      HduReadout('CITIZEN', app.citizenId),
+                      HduReadout('CITIZEN ID', app.citizenId),
                       const SizedBox(height: 2),
-                      HduReadout('OFFICER',
-                          app.officerId ?? '— not enlisted —'),
+                      HduReadout('LAT', app.mesh.latitude.toStringAsFixed(5)),
                       const SizedBox(height: 2),
-                      HduReadout(
-                          'NODE',
-                          app.mesh.nodeId
-                              .toRadixString(16)
-                              .padLeft(4, '0')
-                              .toUpperCase()),
+                      HduReadout('LONG', app.mesh.longitude.toStringAsFixed(5)),
+                      if (app.officerId != null) ...[
+                        const SizedBox(height: 2),
+                        HduReadout('OFFICER ID', app.officerId!),
+                      ],
                     ],
                   ),
                 ),
                 const SizedBox(height: 12),
                 HudPanel(
                   title: 'ABOUT',
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      const HduReadout('PROTOCOL',
-                          'AapadSetu mesh v1 · 18B frame · CRC-8 · TTL5'),
-                      const SizedBox(height: 2),
-                      const HduReadout('RATION TOKEN',
-                          'TOTP-HMAC-SHA256 · 30s window'),
-                      const SizedBox(height: 2),
-                      const HduReadout('LEDGER',
-                          'SHA-256 hash chain · daily duplicate rejection'),
-                      const SizedBox(height: 2),
-                      const HduReadout('ENLISTMENT',
-                          'RSA-signed master key · air-gapped'),
-                    ],
+                  child: const HduReadout(
+                    'AAPADSETU',
+                    'air-gapped relief mesh · v1',
                   ),
                 ),
               ],

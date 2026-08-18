@@ -33,6 +33,10 @@ class MeshController {
   final double startLongitude;
   final MeshAdapter adapter;
 
+  /// Current device position (own node). Fixed origin until GPS lands.
+  double get latitude => startLatitude;
+  double get longitude => startLongitude;
+
   final NonceDeduplicator _dedup = NonceDeduplicator();
   final Map<int, MeshNodeState> _nodes = {};
   int _seq = Random().nextInt(65536);
@@ -100,10 +104,12 @@ class MeshController {
     return adapter.broadcast(packet);
   }
 
-  MeshPacket _newPacket(MeshPacketType type,
-      {required TriageFlags triage,
-      required double latitude,
-      required double longitude}) {
+  MeshPacket _newPacket(
+    MeshPacketType type, {
+    required TriageFlags triage,
+    required double latitude,
+    required double longitude,
+  }) {
     _seq = (_seq + 1) & 0xffff;
     return MeshPacket(
       type: type,
@@ -123,7 +129,10 @@ class MeshController {
       return; // FR-1.4: sliding-window replay rejection
     }
 
-    final node = _nodes.putIfAbsent(p.senderId, () => MeshNodeState(nodeId: p.senderId));
+    final node = _nodes.putIfAbsent(
+      p.senderId,
+      () => MeshNodeState(nodeId: p.senderId),
+    );
     node.updateFrom(rx);
     _nodeUpdates.add(Map.of(_nodes));
 

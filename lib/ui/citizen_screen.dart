@@ -41,7 +41,8 @@ class _CitizenScreenState extends State<CitizenScreen> {
     final app = AppScope.of(context);
     final p = AppPalette.of(context);
     final secondsLeft =
-        totpWindowSeconds - (DateTime.now().millisecondsSinceEpoch ~/ 1000) % totpWindowSeconds;
+        totpWindowSeconds -
+        (DateTime.now().millisecondsSinceEpoch ~/ 1000) % totpWindowSeconds;
 
     return SafeArea(
       child: Column(
@@ -54,8 +55,7 @@ class _CitizenScreenState extends State<CitizenScreen> {
               children: [
                 HudPanel(
                   title: 'SOS BROADCAST',
-                  borderColor:
-                      app.sosActive ? p.error : p.primaryDim,
+                  borderColor: app.sosActive ? p.error : p.primaryDim,
                   child: _SosPanel(app: app),
                 ),
                 const SizedBox(height: 12),
@@ -64,7 +64,15 @@ class _CitizenScreenState extends State<CitizenScreen> {
                   child: _DynamicQr(app: app, secondsLeft: secondsLeft),
                 ),
                 const SizedBox(height: 12),
-                HudPanel(title: 'MESH UPLINK', child: _MeshStatus(app: app)),
+                HudPanel(
+                  title: 'LOCATION',
+                  child: _LocationPanel(app: app),
+                ),
+                const SizedBox(height: 12),
+                HudPanel(
+                  title: 'MESH LINK',
+                  child: _MeshStatus(app: app),
+                ),
               ],
             ),
           ),
@@ -137,13 +145,15 @@ class _SosPanel extends StatelessWidget {
               Padding(
                 padding: const EdgeInsets.only(left: 4),
                 child: InkWell(
-                  onTap: () => app.setSosFlags(TriageFlags(
-                    severity: s,
-                    medical: flags.medical,
-                    trapped: flags.trapped,
-                    water: flags.water,
-                    food: flags.food,
-                  )),
+                  onTap: () => app.setSosFlags(
+                    TriageFlags(
+                      severity: s,
+                      medical: flags.medical,
+                      trapped: flags.trapped,
+                      water: flags.water,
+                      food: flags.food,
+                    ),
+                  ),
                   child: Container(
                     width: 28,
                     height: 28,
@@ -189,17 +199,19 @@ class _SosPanel extends StatelessWidget {
                       'water' => flags.water,
                       _ => flags.food,
                     },
-                    onTap: () => app.setSosFlags(TriageFlags(
-                      severity: flags.severity,
-                      medical: need.$2 == 'medical'
-                          ? !flags.medical
-                          : flags.medical,
-                      trapped: need.$2 == 'trapped'
-                          ? !flags.trapped
-                          : flags.trapped,
-                      water: need.$2 == 'water' ? !flags.water : flags.water,
-                      food: need.$2 == 'food' ? !flags.food : flags.food,
-                    )),
+                    onTap: () => app.setSosFlags(
+                      TriageFlags(
+                        severity: flags.severity,
+                        medical: need.$2 == 'medical'
+                            ? !flags.medical
+                            : flags.medical,
+                        trapped: need.$2 == 'trapped'
+                            ? !flags.trapped
+                            : flags.trapped,
+                        water: need.$2 == 'water' ? !flags.water : flags.water,
+                        food: need.$2 == 'food' ? !flags.food : flags.food,
+                      ),
+                    ),
                   ),
                 ),
               ),
@@ -222,7 +234,10 @@ class _SosPanel extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 8),
-        HduReadout('PACKET', '18B TTL5 TYPE=0x01 TRIAGE=${flags.value.toString().padLeft(2, '0')}'),
+        HduReadout(
+          'PACKET',
+          '18B TTL5 TYPE=0x01 TRIAGE=${flags.value.toString().padLeft(2, '0')}',
+        ),
         if (app.sosActive)
           Padding(
             padding: const EdgeInsets.only(top: 8),
@@ -233,11 +248,11 @@ class _SosPanel extends StatelessWidget {
   }
 
   TextStyle _dim(BuildContext context) => TextStyle(
-        color: AppPalette.of(context).textDim,
-        fontFamily: 'monospace',
-        fontSize: 11,
-        letterSpacing: 1,
-      );
+    color: AppPalette.of(context).textDim,
+    fontFamily: 'monospace',
+    fontSize: 11,
+    letterSpacing: 1,
+  );
 }
 
 class _NeedToggle extends StatelessWidget {
@@ -260,10 +275,7 @@ class _NeedToggle extends StatelessWidget {
         padding: const EdgeInsets.symmetric(vertical: 8),
         alignment: Alignment.center,
         decoration: BoxDecoration(
-          border: Border.all(
-            color: on ? p.secondary : p.textDim,
-            width: 1,
-          ),
+          border: Border.all(color: on ? p.secondary : p.textDim, width: 1),
           color: on ? p.secondary.withValues(alpha: 0.14) : null,
         ),
         child: Text(
@@ -326,6 +338,34 @@ class _DynamicQr extends StatelessWidget {
   }
 }
 
+class _LocationPanel extends StatelessWidget {
+  const _LocationPanel({required this.app});
+
+  final dynamic app;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = AppPalette.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        HduReadout('LAT', '${app.mesh.latitude.toStringAsFixed(5)}° N'),
+        const SizedBox(height: 4),
+        HduReadout('LONG', '${app.mesh.longitude.toStringAsFixed(5)}° E'),
+        const SizedBox(height: 4),
+        Text(
+          'Coordinates transmit with every SOS beacon.',
+          style: TextStyle(
+            color: p.textDim,
+            fontFamily: 'monospace',
+            fontSize: 9,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class _MeshStatus extends StatelessWidget {
   const _MeshStatus({required this.app});
 
@@ -334,20 +374,42 @@ class _MeshStatus extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = AppPalette.of(context);
-    final sosCount = (app.mesh.nodes.values as Iterable<MeshNodeState>)
-        .where((MeshNodeState n) => n.hasSos)
-        .length;
+    final nodes = (app.mesh.nodes.values as Iterable<MeshNodeState>).toList();
+    final ok = nodes.isNotEmpty;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        HduReadout('ADAPTER',
-            '${app.mesh.adapter.name} / ${app.useSimulator ? 'SIMULATED' : 'NATIVE'}'),
-        HduReadout('STATUS', app.mesh.adapter.status),
-        HduReadout('FRAMES RX', '${app.mesh.framesSeen}'),
-        HduReadout('FRAMES RELAYED', '${app.mesh.framesRelayed}'),
-        HduReadout('KNOWN NODES', '${app.mesh.nodes.length}'),
-        HduReadout('ACTIVE SOS', '$sosCount',
-            color: sosCount > 0 ? p.error : p.primary),
+        Row(
+          children: [
+            Container(width: 10, height: 10, color: ok ? p.primary : p.error),
+            const SizedBox(width: 8),
+            Text(
+              ok ? 'LINK OK' : 'SCANNING…',
+              style: TextStyle(
+                color: ok ? p.primary : p.error,
+                fontFamily: 'monospace',
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 1,
+              ),
+            ),
+            const Spacer(),
+            Text(
+              '${nodes.length} NODE${nodes.length == 1 ? '' : 'S'}',
+              style: TextStyle(
+                color: p.textDim,
+                fontFamily: 'monospace',
+                fontSize: 11,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        HduReadout(
+          'SOS BEACONS',
+          '${nodes.where((n) => n.hasSos).length} ACTIVE',
+          color: nodes.where((n) => n.hasSos).isNotEmpty ? p.error : p.primary,
+        ),
       ],
     );
   }

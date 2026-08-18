@@ -6,6 +6,8 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:permission_handler/permission_handler.dart';
 
@@ -13,7 +15,6 @@ import '../app_scope.dart';
 import '../core/app_state.dart';
 import '../core/ledger/ledger_store.dart';
 import '../core/master_key.dart';
-import '../core/mesh/mesh_node.dart';
 import 'hud_theme.dart';
 
 class OfficerScreen extends StatefulWidget {
@@ -497,139 +498,124 @@ class _MapTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = AppPalette.of(context);
+    final nodes = app.mesh.nodes.values.toList();
+    final center = LatLng(app.mesh.latitude, app.mesh.longitude);
     return Stack(
       children: [
         Positioned.fill(
-          child: CustomPaint(
-            painter: _TacticalMapPainter(
-              ownNodeId: app.mesh.nodeId,
-              nodes: app.mesh.nodes.values.toList(),
-              primary: p.primary,
-              secondary: p.secondary,
-              error: p.error,
-              grid: p.grid,
-              bg: p.bg,
-              textDim: p.textDim,
+          child: FlutterMap(
+            options: MapOptions(
+              initialCenter: center,
+              initialZoom: 16,
+              interactionOptions: const InteractionOptions(
+                flags: InteractiveFlag.all & ~InteractiveFlag.rotate,
+              ),
             ),
+            children: [
+              // Offline fallback: grid shows through failed/blank tiles.
+              CustomPaint(
+                painter: _GridPainter(grid: p.grid, textDim: p.textDim),
+              ),
+              TileLayer(
+                urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                userAgentPackageName: 'org.aapadsetu.aapadsetu',
+              ),
+              MarkerLayer(
+                markers: [
+                  for (final n in nodes)
+                    Marker(
+                      point: LatLng(n.latitude, n.longitude),
+                      width: 14,
+                      height: 14,
+                      child: _MapDot(
+                        color: n.nodeId == app.mesh.nodeId
+                            ? p.primary
+                            : n.hasSos
+                            ? p.error
+                            : p.secondary,
+                        self: n.nodeId == app.mesh.nodeId,
+                        sos: n.hasSos,
+                      ),
+                    ),
+                ],
+              ),
+              const RichAttributionWidget(
+                attributions: [TextSourceAttribution('OpenStreetMap')],
+              ),
+            ],
           ),
         ),
         Positioned(
           left: 8,
           bottom: 8,
-          child: HduReadout(
-            'NODES',
-            '${app.mesh.nodes.length}',
-            color: p.secondary,
-          ),
+          child: HduReadout('NODES', '${nodes.length}', color: p.secondary),
         ),
       ],
     );
   }
 }
 
-class _TacticalMapPainter extends CustomPainter {
-  _TacticalMapPainter({
-    required this.ownNodeId,
-    required this.nodes,
-    required this.primary,
-    required this.secondary,
-    required this.error,
-    required this.grid,
-    required this.bg,
-    required this.textDim,
-  });
+class _MapDot extends StatelessWidget {
+  const _MapDot({required this.color, required this.self, required this.sos});
 
-  final int ownNodeId;
-  final List<MeshNodeState> nodes;
-  final Color primary;
-  final Color secondary;
-  final Color error;
+  final Color color;
+  final bool self;
+  final bool sos;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Container(
+        width: self ? 12 : 8,
+        height: self ? 12 : 8,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: color,
+          boxShadow: sos
+              ? [
+                  BoxShadow(
+                    color: color.withValues(alpha: 0.6),
+                    blurRadius: 10,
+                    spreadRadius: 4,
+                  ),
+                ]
+              : null,
+        ),
+      ),
+    );
+  }
+}
+
+class _GridPainter extends CustomPainter {
+  _GridPainter({required this.grid, required this.textDim});
+
   final Color grid;
-  final Color bg;
   final Color textDim;
 
   @override
   void paint(Canvas canvas, Size size) {
-    final gridPaint = Paint()
+    final paint = Paint()
       ..color = grid
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1;
     const step = 36.0;
     for (var x = 0.0; x <= size.width; x += step) {
-      canvas.drawLine(Offset(x, 0), Offset(x, size.height), gridPaint);
+      canvas.drawLine(Offset(x, 0), Offset(x, size.height), paint);
     }
     for (var y = 0.0; y <= size.height; y += step) {
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), gridPaint);
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), paint);
     }
-
-    // Normalize node positions into the canvas via a simple local projection.
-    if (nodes.isNotEmpty) {
-      final lats = [0.0, ...nodes.map((n) => n.latitude)];
-      final lons = [0.0, ...nodes.map((n) => n.longitude)];
-      final minLat = lats.reduce((a, b) => a < b ? a : b);
-      final maxLat = lats.reduce((a, b) => a > b ? a : b);
-      final minLon = lons.reduce((a, b) => a < b ? a : b);
-      final maxLon = lons.reduce((a, b) => a > b ? a : b);
-      final latSpan = (maxLat - minLat).abs().clamp(1e-6, double.infinity);
-      final lonSpan = (maxLon - minLon).abs().clamp(1e-6, double.infinity);
-
-      for (final node in nodes) {
-        final x = (node.longitude - minLon) / lonSpan * (size.width - 24) + 12;
-        final y =
-            (size.height - 24) -
-            (node.latitude - minLat) / latSpan * (size.height - 24) +
-            12;
-        final isSelf = node.nodeId == ownNodeId;
-        final color = isSelf
-            ? primary
-            : node.hasSos
-            ? error
-            : secondary;
-        final r = isSelf ? 8.0 : 5.0;
-
-        canvas.drawCircle(Offset(x, y), r, Paint()..color = color);
-        if (node.hasSos || isSelf) {
-          canvas.drawCircle(
-            Offset(x, y),
-            r + 6,
-            Paint()
-              ..color = color.withValues(alpha: 0.15)
-              ..style = PaintingStyle.fill,
-          );
-          canvas.drawCircle(
-            Offset(x, y),
-            r + 10,
-            Paint()
-              ..color = color.withValues(alpha: 0.35)
-              ..style = PaintingStyle.stroke,
-          );
-        }
-        canvas.drawCircle(
-          Offset(x, y),
-          r + 2,
-          Paint()
-            ..color = bg
-            ..style = PaintingStyle.stroke,
-        );
-      }
-    } else {
-      final tp = TextPainter(
-        text: TextSpan(
-          text: 'AWAITING MESH BEACONS',
-          style: TextStyle(
-            color: textDim,
-            fontFamily: 'monospace',
-            fontSize: 11,
-          ),
-        ),
-        textDirection: TextDirection.ltr,
-      )..layout();
-      tp.paint(canvas, Offset((size.width - tp.width) / 2, size.height / 2));
-    }
+    final tp = TextPainter(
+      text: TextSpan(
+        text: 'OFFLINE — AWAITING TILE MAP',
+        style: TextStyle(color: textDim, fontFamily: 'monospace', fontSize: 11),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    tp.paint(canvas, Offset((size.width - tp.width) / 2, size.height / 2));
   }
 
   @override
-  bool shouldRepaint(covariant _TacticalMapPainter oldDelegate) =>
-      oldDelegate.nodes.length != nodes.length ||
-      oldDelegate.ownNodeId != ownNodeId;
+  bool shouldRepaint(covariant _GridPainter oldDelegate) =>
+      oldDelegate.grid != grid;
 }

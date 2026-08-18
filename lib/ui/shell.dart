@@ -53,9 +53,7 @@ class _ModeShellState extends State<ModeShell> {
             NavigationDestination(
               icon: Icon(
                 Icons.shield_outlined,
-                color: app.role == Role.officer
-                    ? p.primary
-                    : p.textDim,
+                color: app.role == Role.officer ? p.primary : p.textDim,
               ),
               selectedIcon: const Icon(Icons.shield),
               label: 'OFFICER',

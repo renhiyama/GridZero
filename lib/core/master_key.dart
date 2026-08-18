@@ -25,12 +25,8 @@ class MasterKey {
 }
 
 class MasterKeyCheck {
-  MasterKeyCheck.ok(this.masterKey)
-      : message = '',
-        ok = true;
-  MasterKeyCheck.fail(this.message)
-      : masterKey = null,
-        ok = false;
+  MasterKeyCheck.ok(this.masterKey) : message = '', ok = true;
+  MasterKeyCheck.fail(this.message) : masterKey = null, ok = false;
 
   final bool ok;
   final String message;
@@ -58,7 +54,8 @@ MasterKey? parseMasterKeyPayload(String payload) {
   }
 }
 
-String _canonical(MasterKey key) => '$_canonicalPrefix${key.officerId}|issued_at=${key.issuedAt}';
+String _canonical(MasterKey key) =>
+    '$_canonicalPrefix${key.officerId}|issued_at=${key.issuedAt}';
 
 /// Decodes a PEM `PUBLIC KEY` block into the embedded RSA (n, e).
 ({BigInt modulus, BigInt exponent}) parseRsaPublicPem(String pem) {
@@ -126,9 +123,9 @@ Future<MasterKeyCheck> verifyMasterKey({
 
   final signer = RSASigner(SHA256Digest(), '0609608648016503040201')
     ..init(
-        false,
-        PublicKeyParameter<RSAPublicKey>(
-            RSAPublicKey(pub.modulus, pub.exponent)));
+      false,
+      PublicKeyParameter<RSAPublicKey>(RSAPublicKey(pub.modulus, pub.exponent)),
+    );
   final valid = signer.verifySignature(
     utf8.encode(_canonical(key)),
     RSASignature(Uint8List.fromList(sig)),

@@ -177,7 +177,8 @@ class NativeMeshAdapter implements MeshAdapter {
   }
 
   @override
-  Future<void> stop() async {    _dutyCycleTimer?.cancel();
+  Future<void> stop() async {
+    _dutyCycleTimer?.cancel();
     await _scanSub?.cancel();
     _scanSub = null;
     try {

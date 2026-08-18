@@ -52,7 +52,9 @@ class AppState extends ChangeNotifier {
   // ---- appearance ----
   ThemeMode themeMode = ThemeMode.system;
   Color seedColor = const Color(0xFF00FF9C);
-  bool useSystemDynamic = true;
+  // Off by default: keep the brand green. User can opt into the platform
+  // accent (Android 12+ / desktop) but must be able to flip back.
+  bool useSystemDynamic = false;
 
   void setThemeMode(ThemeMode mode) {
     themeMode = mode;

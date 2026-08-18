@@ -66,13 +66,15 @@ class _HqScreenState extends State<HqScreen> {
                 const Spacer(),
                 Container(
                   padding: const EdgeInsets.symmetric(
-                      horizontal: 6, vertical: 2),
+                    horizontal: 6,
+                    vertical: 2,
+                  ),
                   decoration: BoxDecoration(
                     border: Border.all(color: p.primary),
                     color: p.primary.withValues(alpha: 0.12),
                   ),
                   child: Text(
-                    simActive ? 'LIVE SIMULATOR' : 'LIVE GATEWAY BRIDGE',
+                    simActive ? 'SIMULATION ACTIVE' : 'LIVE MESH',
                     style: TextStyle(
                       color: p.primary,
                       fontFamily: 'monospace',
@@ -89,11 +91,14 @@ class _HqScreenState extends State<HqScreen> {
               builder: (context, constraints) {
                 final wide = constraints.maxWidth > 900;
                 final telemetry = _TelemetryPanel(app: app);
-                final simulatorPanel =
-                    _SimulatorPanel(app: app, simActive: simActive);
+                final simulatorPanel = _SimulatorPanel(
+                  app: app,
+                  simActive: simActive,
+                );
                 final heatmap = _HeatmapPanel(
-                    nodes: app.mesh.nodes.values.toList(),
-                    palette: AppPalette.of(context));
+                  nodes: app.mesh.nodes.values.toList(),
+                  palette: AppPalette.of(context),
+                );
                 final logs = _LogsPanel(app: app);
 
                 if (wide) {
@@ -103,7 +108,11 @@ class _HqScreenState extends State<HqScreen> {
                       Expanded(
                         child: ListView(
                           padding: const EdgeInsets.all(12),
-                          children: [telemetry, const SizedBox(height: 12), heatmap],
+                          children: [
+                            telemetry,
+                            const SizedBox(height: 12),
+                            heatmap,
+                          ],
                         ),
                       ),
                       Expanded(
@@ -160,13 +169,17 @@ class _TelemetryPanel extends StatelessWidget {
             HduReadout('FRAMES RX', '${app.mesh.framesSeen}'),
             HduReadout('FRAMES RELAYED', '${app.mesh.framesRelayed}'),
             HduReadout('KNOWN NODES', '${nodes.length}'),
-            HduReadout('ACTIVE SOS BEACONS', '$sosCount',
-                color: sosCount > 0 ? p.error : p.primary),
+            HduReadout(
+              'ACTIVE SOS BEACONS',
+              '$sosCount',
+              color: sosCount > 0 ? p.error : p.primary,
+            ),
             HduReadout('RATIONS ALLOCATED', '${app.claimCount}'),
-            HduReadout('LEDGER RECORDS',
-                '${snapshot.data ?? '…'}'),
-            HduReadout('MAX HOP SEEN',
-                '${nodes.fold<int>(0, (int m, MeshNodeState n) => n.hopCount > m ? n.hopCount : m)}'),
+            HduReadout('LEDGER RECORDS', '${snapshot.data ?? '…'}'),
+            HduReadout(
+              'MAX HOP SEEN',
+              '${nodes.fold<int>(0, (int m, MeshNodeState n) => n.hopCount > m ? n.hopCount : m)}',
+            ),
           ],
         ),
       ),
@@ -197,7 +210,10 @@ class _SimulatorPanelState extends State<_SimulatorPanel> {
         children: [
           Row(
             children: [
-              Text('NODES', style: TextStyle(color: p.textDim, fontFamily: 'monospace')),
+              Text(
+                'NODES',
+                style: TextStyle(color: p.textDim, fontFamily: 'monospace'),
+              ),
               const SizedBox(width: 8),
               Expanded(
                 child: Slider(
@@ -210,9 +226,10 @@ class _SimulatorPanelState extends State<_SimulatorPanel> {
                   onChanged: (v) => setState(() => hq._nodeCount = v.round()),
                 ),
               ),
-              Text('${hq._nodeCount}',
-                  style: TextStyle(
-                      color: p.primary, fontFamily: 'monospace')),
+              Text(
+                '${hq._nodeCount}',
+                style: TextStyle(color: p.primary, fontFamily: 'monospace'),
+              ),
             ],
           ),
           Row(
@@ -228,22 +245,26 @@ class _SimulatorPanelState extends State<_SimulatorPanel> {
                       : () {
                           if (!app.mesh.adapter.isSimulated) {
                             app.setUseSimulator(true).then((_) {
-                              hq._sim = MeshSimulator(app.mesh.adapter,
-                                  nodeCount: hq._nodeCount)
-                                ..start();
+                              hq._sim = MeshSimulator(
+                                app.mesh.adapter,
+                                nodeCount: hq._nodeCount,
+                              )..start();
                               setState(() {});
                             });
                           } else {
-                            hq._sim = MeshSimulator(app.mesh.adapter,
-                                nodeCount: hq._nodeCount)
-                              ..start();
+                            hq._sim = MeshSimulator(
+                              app.mesh.adapter,
+                              nodeCount: hq._nodeCount,
+                            )..start();
                             setState(() {});
                           }
                         },
                   child: Text(
                     widget.simActive ? '■ STOP SIMULATION' : '► RUN SIMULATION',
                     style: const TextStyle(
-                        fontFamily: 'monospace', letterSpacing: 1),
+                      fontFamily: 'monospace',
+                      letterSpacing: 1,
+                    ),
                   ),
                 ),
               ),
@@ -312,8 +333,7 @@ class _HeatmapPainter extends CustomPainter {
         final alpha = (heat.clamp(0, 6) / 6).toDouble();
         canvas.drawRect(
           cell,
-          Paint()
-            ..color = Color.lerp(palette.panel, palette.error, alpha)!,
+          Paint()..color = Color.lerp(palette.panel, palette.error, alpha)!,
         );
         canvas.drawRect(
           cell,
@@ -327,7 +347,11 @@ class _HeatmapPainter extends CustomPainter {
     final tp = TextPainter(
       text: TextSpan(
         text: 'SOS DENSITY / SECTOR GRID',
-        style: TextStyle(color: palette.textDim, fontFamily: 'monospace', fontSize: 10),
+        style: TextStyle(
+          color: palette.textDim,
+          fontFamily: 'monospace',
+          fontSize: 10,
+        ),
       ),
       textDirection: TextDirection.ltr,
     )..layout();

@@ -108,11 +108,9 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.textContaining('APPEARANCE'), findsOneWidget);
-    expect(find.textContaining('THEME MODE'), findsOneWidget);
-    expect(find.textContaining('MATERIAL YOU ACCENT'), findsOneWidget);
-    expect(find.textContaining('MESH UPLINK'), findsOneWidget);
-    expect(find.textContaining('REQUEST PERMISSIONS'), findsOneWidget);
-    expect(find.textContaining('IDENTITY'), findsOneWidget);
+    expect(find.textContaining('THEME'), findsOneWidget);
+    expect(find.textContaining('USE DEVICE ACCENT COLOR'), findsOneWidget);
+    expect(find.text('MESH LINK'), findsOneWidget);
 
     await teardown(tester, state);
   });
@@ -129,7 +127,7 @@ void main() {
     state.setUseSystemDynamic(false);
     await tester.pumpAndSettle();
 
-    expect(find.text('PRIMARY ACCENT'), findsOneWidget);
+    expect(find.text('ACCENT COLOR'), findsOneWidget);
     expect(find.byTooltip('GREEN (FF00FF9C)'), findsOneWidget);
     expect(find.byTooltip('AMBER (FFFFB300)'), findsOneWidget);
 

@@ -45,8 +45,10 @@ class AapadSetuApp extends StatelessWidget {
                 title: 'AapadSetu / आपदसेतु',
                 debugShowCheckedModeBanner: false,
                 theme: HudTheme.build(seed: seed, brightness: Brightness.light),
-                darkTheme:
-                    HudTheme.build(seed: seed, brightness: Brightness.dark),
+                darkTheme: HudTheme.build(
+                  seed: seed,
+                  brightness: Brightness.dark,
+                ),
                 themeMode: state.themeMode,
                 home: const ModeShell(),
               );

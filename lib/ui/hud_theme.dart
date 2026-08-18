@@ -54,13 +54,19 @@ class AppPalette {
 const Color kDefaultSeed = Color(0xFF00FF9C);
 
 abstract final class HudTheme {
-  static ThemeData dark = build(seed: kDefaultSeed, brightness: Brightness.dark);
+  static ThemeData dark = build(
+    seed: kDefaultSeed,
+    brightness: Brightness.dark,
+  );
 
   static ThemeData build({
     required Color seed,
     required Brightness brightness,
   }) {
-    final scheme = ColorScheme.fromSeed(seedColor: seed, brightness: brightness);
+    final scheme = ColorScheme.fromSeed(
+      seedColor: seed,
+      brightness: brightness,
+    );
     final dark = brightness == Brightness.dark;
     final base = ThemeData(
       useMaterial3: true,
@@ -68,8 +74,9 @@ abstract final class HudTheme {
       colorScheme: scheme,
     );
     return base.copyWith(
-      scaffoldBackgroundColor:
-          dark ? const Color(0xFF000805) : const Color(0xFFF2F8F5),
+      scaffoldBackgroundColor: dark
+          ? const Color(0xFF000805)
+          : const Color(0xFFF2F8F5),
       splashFactory: NoSplash.splashFactory,
       dividerColor: scheme.primary.withValues(alpha: 0.4),
       textTheme: base.textTheme.apply(
@@ -78,8 +85,9 @@ abstract final class HudTheme {
         displayColor: dark ? const Color(0xFFBFEED9) : const Color(0xFF0B2218),
       ),
       appBarTheme: AppBarTheme(
-        backgroundColor:
-            dark ? const Color(0xFF000805) : const Color(0xFFF2F8F5),
+        backgroundColor: dark
+            ? const Color(0xFF000805)
+            : const Color(0xFFF2F8F5),
         elevation: 0,
         titleTextStyle: TextStyle(
           color: scheme.primary,
@@ -113,8 +121,9 @@ abstract final class HudTheme {
       ),
       tabBarTheme: TabBarThemeData(
         labelColor: scheme.primary,
-        unselectedLabelColor:
-            dark ? const Color(0xFF4E7A64) : const Color(0xFF5C7A6C),
+        unselectedLabelColor: dark
+            ? const Color(0xFF4E7A64)
+            : const Color(0xFF5C7A6C),
         indicatorColor: scheme.primary,
       ),
     );
@@ -123,7 +132,12 @@ abstract final class HudTheme {
 
 /// Structural 1px bordered panel with a glowing top rule.
 class HudPanel extends StatelessWidget {
-  const HudPanel({super.key, required this.child, this.title, this.borderColor});
+  const HudPanel({
+    super.key,
+    required this.child,
+    this.title,
+    this.borderColor,
+  });
 
   final Widget child;
   final String? title;
@@ -193,7 +207,10 @@ class HduReadout extends StatelessWidget {
       text: TextSpan(
         style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
         children: [
-          TextSpan(text: '$label: ', style: TextStyle(color: p.textDim)),
+          TextSpan(
+            text: '$label: ',
+            style: TextStyle(color: p.textDim),
+          ),
           TextSpan(
             text: value,
             style: TextStyle(
@@ -222,9 +239,7 @@ class HudAlertBar extends StatelessWidget {
       decoration: BoxDecoration(
         border: Border.all(color: c),
         color: c.withValues(alpha: 0.12),
-        boxShadow: [
-          BoxShadow(color: c.withValues(alpha: 0.35), blurRadius: 8),
-        ],
+        boxShadow: [BoxShadow(color: c.withValues(alpha: 0.35), blurRadius: 8)],
       ),
       child: Text(
         '!! $message',

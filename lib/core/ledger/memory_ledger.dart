@@ -33,14 +33,16 @@ class MemoryLedgerStore implements LedgerStore {
     }
     final day = record.claimedAt ~/ 86400;
     final dup = _records.any(
-      (r) => r.citizenId == record.citizenId &&
+      (r) =>
+          r.citizenId == record.citizenId &&
           r.rationCode == record.rationCode &&
           r.claimedAt ~/ 86400 == day,
     );
     if (dup) {
       return ClaimResult(
         ClaimStatus.duplicate,
-        message: 'citizen ${record.citizenId} already claimed '
+        message:
+            'citizen ${record.citizenId} already claimed '
             '${record.rationCode} within 24h window',
       );
     }

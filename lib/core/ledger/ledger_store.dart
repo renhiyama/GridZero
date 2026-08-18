@@ -6,8 +6,9 @@ import 'dart:convert';
 import 'package:crypto/crypto.dart';
 
 /// Shared genesis anchor so every chain starts from the same root hash.
-final String genesisHash =
-    sha256.convert(utf8.encode('AapadSetu-Genesis-Anchored')).toString();
+final String genesisHash = sha256
+    .convert(utf8.encode('AapadSetu-Genesis-Anchored'))
+    .toString();
 
 class LedgerRecord {
   LedgerRecord({
@@ -44,26 +45,26 @@ class LedgerRecord {
       sha256.convert(utf8.encode('${recordData()}$prevHash')).toString();
 
   Map<String, Object?> toMap() => {
-        'record_id': recordId,
-        'citizen_id': citizenId,
-        'ration_code': rationCode,
-        'claimed_at': claimedAt,
-        'officer_id': officerId,
-        'prev_hash': prevHash,
-        'current_hash': currentHash,
-        'sync_status': syncStatus,
-      };
+    'record_id': recordId,
+    'citizen_id': citizenId,
+    'ration_code': rationCode,
+    'claimed_at': claimedAt,
+    'officer_id': officerId,
+    'prev_hash': prevHash,
+    'current_hash': currentHash,
+    'sync_status': syncStatus,
+  };
 
   factory LedgerRecord.fromMap(Map<String, Object?> map) => LedgerRecord(
-        recordId: map['record_id'] as String,
-        citizenId: map['citizen_id'] as String,
-        rationCode: map['ration_code'] as String,
-        claimedAt: map['claimed_at'] as int,
-        officerId: map['officer_id'] as String,
-        prevHash: map['prev_hash'] as String,
-        currentHash: map['current_hash'] as String,
-        syncStatus: map['sync_status'] as int? ?? 0,
-      );
+    recordId: map['record_id'] as String,
+    citizenId: map['citizen_id'] as String,
+    rationCode: map['ration_code'] as String,
+    claimedAt: map['claimed_at'] as int,
+    officerId: map['officer_id'] as String,
+    prevHash: map['prev_hash'] as String,
+    currentHash: map['current_hash'] as String,
+    syncStatus: map['sync_status'] as int? ?? 0,
+  );
 }
 
 enum ClaimStatus { granted, duplicate, invalidToken, chainMismatch, error }

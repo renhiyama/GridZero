@@ -48,7 +48,12 @@ class SqliteLedgerStore implements LedgerStore {
 
   @override
   Future<String> lastHash() async {
-    final rows = await _db.query('ledger_records', columns: ['current_hash'], orderBy: 'claimed_at DESC', limit: 1);
+    final rows = await _db.query(
+      'ledger_records',
+      columns: ['current_hash'],
+      orderBy: 'claimed_at DESC',
+      limit: 1,
+    );
     return rows.isEmpty ? genesisHash : rows.first['current_hash'] as String;
   }
 
@@ -60,8 +65,7 @@ class SqliteLedgerStore implements LedgerStore {
 
   @override
   Future<int> recordsCount() async {
-    final rows = await _db
-        .rawQuery('SELECT COUNT(*) AS c FROM ledger_records');
+    final rows = await _db.rawQuery('SELECT COUNT(*) AS c FROM ledger_records');
     return rows.first['c'] as int;
   }
 
@@ -77,19 +81,24 @@ class SqliteLedgerStore implements LedgerStore {
     if (await _hasDailyDuplicate(record)) {
       return ClaimResult(
         ClaimStatus.duplicate,
-        message: 'citizen ${record.citizenId} already claimed '
+        message:
+            'citizen ${record.citizenId} already claimed '
             '${record.rationCode} within 24h window',
       );
     }
     try {
-      await _db.insert('ledger_records', record.toMap(),
-          conflictAlgorithm: ConflictAlgorithm.abort);
+      await _db.insert(
+        'ledger_records',
+        record.toMap(),
+        conflictAlgorithm: ConflictAlgorithm.abort,
+      );
       return ClaimResult(ClaimStatus.granted, record: record);
     } on DatabaseException catch (e) {
       if (e.isUniqueConstraintError()) {
         return ClaimResult(
           ClaimStatus.duplicate,
-          message: 'citizen ${record.citizenId} already claimed '
+          message:
+              'citizen ${record.citizenId} already claimed '
               '${record.rationCode} within 24h window',
         );
       }
@@ -116,17 +125,13 @@ class SqliteLedgerStore implements LedgerStore {
     double? longitude,
     int? severity,
   }) async {
-    await _db.insert(
-      'known_mesh_nodes',
-      {
-        'node_id': nodeId,
-        'last_latitude': latitude,
-        'last_longitude': longitude,
-        'triage_severity': severity,
-        'last_seen_epoch': DateTime.now().millisecondsSinceEpoch,
-      },
-      conflictAlgorithm: ConflictAlgorithm.replace,
-    );
+    await _db.insert('known_mesh_nodes', {
+      'node_id': nodeId,
+      'last_latitude': latitude,
+      'last_longitude': longitude,
+      'triage_severity': severity,
+      'last_seen_epoch': DateTime.now().millisecondsSinceEpoch,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 
   @override

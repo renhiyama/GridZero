@@ -29,13 +29,19 @@ class MeshSimulator {
   void start() {
     _nodes.clear();
     for (var i = 0; i < nodeCount; i++) {
-      _nodes.add(_VirtualNode(
-        id: 0x1000 + i,
-        lat: _latBase + _rng.nextDouble() * _latSpan,
-        lon: _lonBase + _rng.nextDouble() * _lonSpan,
-        dx: (0.0004 + _rng.nextDouble() * 0.0012) * (_rng.nextBool() ? 1 : -1),
-        dy: (0.0004 + _rng.nextDouble() * 0.0012) * (_rng.nextBool() ? 1 : -1),
-      ));
+      _nodes.add(
+        _VirtualNode(
+          id: 0x1000 + i,
+          lat: _latBase + _rng.nextDouble() * _latSpan,
+          lon: _lonBase + _rng.nextDouble() * _lonSpan,
+          dx:
+              (0.0004 + _rng.nextDouble() * 0.0012) *
+              (_rng.nextBool() ? 1 : -1),
+          dy:
+              (0.0004 + _rng.nextDouble() * 0.0012) *
+              (_rng.nextBool() ? 1 : -1),
+        ),
+      );
     }
     _timer?.cancel();
     _timer = Timer.periodic(const Duration(milliseconds: 900), (_) => _tick());

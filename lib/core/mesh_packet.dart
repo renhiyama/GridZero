@@ -32,9 +32,9 @@ enum MeshPacketType {
   final int value;
 
   static MeshPacketType fromValue(int v) => values.firstWhere(
-        (t) => t.value == v,
-        orElse: () => throw FormatException('unknown mesh packet type $v'),
-      );
+    (t) => t.value == v,
+    orElse: () => throw FormatException('unknown mesh packet type $v'),
+  );
 }
 
 /// TRIAGE_FLAGS bitfield: [7 Medical][6 Trapped][5 Water][4 Food][3..0 Severity].
@@ -61,12 +61,12 @@ class TriageFlags {
       (severity & 0x0f);
 
   factory TriageFlags.fromValue(int v) => TriageFlags(
-        medical: v & 0x80 != 0,
-        trapped: v & 0x40 != 0,
-        water: v & 0x20 != 0,
-        food: v & 0x10 != 0,
-        severity: v & 0x0f,
-      );
+    medical: v & 0x80 != 0,
+    trapped: v & 0x40 != 0,
+    water: v & 0x20 != 0,
+    food: v & 0x10 != 0,
+    severity: v & 0x0f,
+  );
 
   @override
   String toString() {
@@ -116,8 +116,16 @@ class MeshPacket {
     out[0] = meshMagic;
     out[1] = type.value;
     out.buffer.asByteData().setUint16(2, senderId, Endian.big);
-    out.buffer.asByteData().setInt32(4, _fixedPoint(latitude, 10000000), Endian.big);
-    out.buffer.asByteData().setInt32(8, _fixedPoint(longitude, 10000000), Endian.big);
+    out.buffer.asByteData().setInt32(
+      4,
+      _fixedPoint(latitude, 10000000),
+      Endian.big,
+    );
+    out.buffer.asByteData().setInt32(
+      8,
+      _fixedPoint(longitude, 10000000),
+      Endian.big,
+    );
     out[12] = triage.value;
     out[13] = ((initialTtl & 0x0f) << 4) | (hopCount & 0x0f);
     out.buffer.asByteData().setUint16(14, seq, Endian.big);

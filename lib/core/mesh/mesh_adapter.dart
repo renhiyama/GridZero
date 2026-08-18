@@ -15,6 +15,9 @@ abstract class MeshAdapter {
   /// Human-readable transport label for the HUD.
   String get name;
 
+  /// One-line runtime health / permission status for the HUD.
+  String get status;
+
   /// True when packets are generated locally (no radio involved).
   bool get isSimulated;
 
@@ -25,6 +28,9 @@ abstract class MeshAdapter {
   Future<void> stop();
 
   Future<void> broadcast(MeshPacket packet);
+
+  /// Requests runtime OS permissions needed by this transport.
+  Future<String> ensurePermissions() async => status;
 
   /// Injects a packet from a remote node (simulator / desktop demo only).
   Future<void> injectRemote(MeshPacket packet) async {

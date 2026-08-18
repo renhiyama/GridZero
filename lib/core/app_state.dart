@@ -5,9 +5,11 @@ library;
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
+import 'dart:ui' show Color;
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart' show ThemeMode;
 
 import 'ledger/ledger_store.dart';
 import 'ledger/open.dart';
@@ -42,6 +44,28 @@ class AppState extends ChangeNotifier {
   int claimCount = 0;
   int _claimSeq = 0;
   bool initialized = false;
+
+  // ---- appearance ----
+  ThemeMode themeMode = ThemeMode.system;
+  Color seedColor = const Color(0xFF00FF9C);
+  bool useSystemDynamic = true;
+
+  void setThemeMode(ThemeMode mode) {
+    themeMode = mode;
+    notifyListeners();
+  }
+
+  void setSeedColor(Color color) {
+    seedColor = color;
+    notifyListeners();
+  }
+
+  void setUseSystemDynamic(bool value) {
+    useSystemDynamic = value;
+    notifyListeners();
+  }
+
+  Future<String> requestMeshPermissions() => mesh.adapter.ensurePermissions();
 
   Future<void> init() async {
     ledger = await openLedgerStore();

@@ -39,6 +39,7 @@ class _CitizenScreenState extends State<CitizenScreen> {
   @override
   Widget build(BuildContext context) {
     final app = AppScope.of(context);
+    final p = AppPalette.of(context);
     final secondsLeft =
         totpWindowSeconds - (DateTime.now().millisecondsSinceEpoch ~/ 1000) % totpWindowSeconds;
 
@@ -53,9 +54,8 @@ class _CitizenScreenState extends State<CitizenScreen> {
               children: [
                 HudPanel(
                   title: 'SOS BROADCAST',
-                  borderColor: app.sosActive
-                      ? HudColors.alert
-                      : HudColors.primaryDim,
+                  borderColor:
+                      app.sosActive ? p.error : p.primaryDim,
                   child: _SosPanel(app: app),
                 ),
                 const SizedBox(height: 12),
@@ -81,6 +81,7 @@ class _Header extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final p = AppPalette.of(context);
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
       child: Row(
@@ -88,13 +89,13 @@ class _Header extends StatelessWidget {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
             decoration: BoxDecoration(
-              border: Border.all(color: HudColors.primary),
-              color: HudColors.primary.withValues(alpha: 0.12),
+              border: Border.all(color: p.primary),
+              color: p.primary.withValues(alpha: 0.12),
             ),
             child: Text(
               'CITIZEN ▸ ${app.citizenId}',
-              style: const TextStyle(
-                color: HudColors.primary,
+              style: TextStyle(
+                color: p.primary,
                 fontFamily: 'monospace',
                 fontSize: 12,
                 letterSpacing: 1,
@@ -104,8 +105,8 @@ class _Header extends StatelessWidget {
           const Spacer(),
           Text(
             'NODE ${app.mesh.nodeId.toRadixString(16).padLeft(4, '0').toUpperCase()}',
-            style: const TextStyle(
-              color: HudColors.textDim,
+            style: TextStyle(
+              color: p.textDim,
               fontFamily: 'monospace',
               fontSize: 11,
             ),
@@ -123,13 +124,14 @@ class _SosPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final p = AppPalette.of(context);
     final flags = app.sosFlags;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Row(
           children: [
-            Text('SEVERITY', style: _dim()),
+            Text('SEVERITY', style: _dim(context)),
             const Spacer(),
             for (var s = 1; s <= 5; s++)
               Padding(
@@ -148,20 +150,16 @@ class _SosPanel extends StatelessWidget {
                     alignment: Alignment.center,
                     decoration: BoxDecoration(
                       border: Border.all(
-                        color: s <= flags.severity
-                            ? HudColors.alert
-                            : HudColors.textDim,
+                        color: s <= flags.severity ? p.error : p.textDim,
                       ),
                       color: s <= flags.severity
-                          ? HudColors.alert.withValues(alpha: 0.15)
+                          ? p.error.withValues(alpha: 0.15)
                           : null,
                     ),
                     child: Text(
                       '$s',
                       style: TextStyle(
-                        color: s <= flags.severity
-                            ? HudColors.alert
-                            : HudColors.textDim,
+                        color: s <= flags.severity ? p.error : p.textDim,
                         fontFamily: 'monospace',
                         fontWeight: FontWeight.bold,
                       ),
@@ -210,7 +208,7 @@ class _SosPanel extends StatelessWidget {
         const SizedBox(height: 12),
         FilledButton(
           style: FilledButton.styleFrom(
-            backgroundColor: app.sosActive ? HudColors.alert : HudColors.primary,
+            backgroundColor: app.sosActive ? p.error : p.primary,
             padding: const EdgeInsets.symmetric(vertical: 16),
           ),
           onPressed: () => app.setSosActive(!app.sosActive),
@@ -226,16 +224,16 @@ class _SosPanel extends StatelessWidget {
         const SizedBox(height: 8),
         HduReadout('PACKET', '18B TTL5 TYPE=0x01 TRIAGE=${flags.value.toString().padLeft(2, '0')}'),
         if (app.sosActive)
-          const Padding(
-            padding: EdgeInsets.only(top: 8),
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
             child: HudAlertBar('SOS ACTIVE — broadcasting every 30s via mesh'),
           ),
       ],
     );
   }
 
-  TextStyle _dim() => const TextStyle(
-        color: HudColors.textDim,
+  TextStyle _dim(BuildContext context) => TextStyle(
+        color: AppPalette.of(context).textDim,
         fontFamily: 'monospace',
         fontSize: 11,
         letterSpacing: 1,
@@ -255,6 +253,7 @@ class _NeedToggle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final p = AppPalette.of(context);
     return InkWell(
       onTap: onTap,
       child: Container(
@@ -262,15 +261,15 @@ class _NeedToggle extends StatelessWidget {
         alignment: Alignment.center,
         decoration: BoxDecoration(
           border: Border.all(
-            color: on ? HudColors.amber : HudColors.textDim,
+            color: on ? p.secondary : p.textDim,
             width: 1,
           ),
-          color: on ? HudColors.amber.withValues(alpha: 0.14) : null,
+          color: on ? p.secondary.withValues(alpha: 0.14) : null,
         ),
         child: Text(
           label,
           style: TextStyle(
-            color: on ? HudColors.amber : HudColors.textDim,
+            color: on ? p.secondary : p.textDim,
             fontFamily: 'monospace',
             fontSize: 11,
             fontWeight: on ? FontWeight.bold : FontWeight.normal,
@@ -289,6 +288,7 @@ class _DynamicQr extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final p = AppPalette.of(context);
     final payload = app.citizenQrPayload();
     return Column(
       children: [
@@ -308,15 +308,15 @@ class _DynamicQr extends StatelessWidget {
         HduReadout(
           'REFRESH',
           '${secondsLeft.toString().padLeft(2, '0')}s',
-          color: secondsLeft <= 5 ? HudColors.alert : HudColors.primary,
+          color: secondsLeft <= 5 ? p.error : p.primary,
         ),
         const SizedBox(height: 4),
         Text(
           payload,
           maxLines: 2,
           overflow: TextOverflow.ellipsis,
-          style: const TextStyle(
-            color: HudColors.textDim,
+          style: TextStyle(
+            color: p.textDim,
             fontFamily: 'monospace',
             fontSize: 9,
           ),
@@ -333,17 +333,21 @@ class _MeshStatus extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final sosCount = app.mesh.nodes.values
+    final p = AppPalette.of(context);
+    final sosCount = (app.mesh.nodes.values as Iterable<MeshNodeState>)
         .where((MeshNodeState n) => n.hasSos)
         .length;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        HduReadout('ADAPTER', '${app.mesh.adapter.name} / ${app.useSimulator ? 'SIMULATED' : 'NATIVE'}'),
+        HduReadout('ADAPTER',
+            '${app.mesh.adapter.name} / ${app.useSimulator ? 'SIMULATED' : 'NATIVE'}'),
+        HduReadout('STATUS', app.mesh.adapter.status),
         HduReadout('FRAMES RX', '${app.mesh.framesSeen}'),
         HduReadout('FRAMES RELAYED', '${app.mesh.framesRelayed}'),
         HduReadout('KNOWN NODES', '${app.mesh.nodes.length}'),
-        HduReadout('ACTIVE SOS', '$sosCount', color: sosCount > 0 ? HudColors.alert : HudColors.primary),
+        HduReadout('ACTIVE SOS', '$sosCount',
+            color: sosCount > 0 ? p.error : p.primary),
       ],
     );
   }

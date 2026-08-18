@@ -14,6 +14,7 @@ import 'dart:async';
 import 'package:ble_peripheral_plus/ble_peripheral_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 import '../mesh_packet.dart';
 import 'mesh_adapter.dart';
@@ -35,6 +36,10 @@ class NativeMeshAdapter implements MeshAdapter {
   @override
   String get name => 'BLE';
 
+  String _status = 'unknown';
+  @override
+  String get status => _status;
+
   @override
   bool get isSimulated => false;
 
@@ -42,7 +47,38 @@ class NativeMeshAdapter implements MeshAdapter {
   Stream<MeshRxPacket> get onPacket => _rx.stream;
 
   @override
+  Future<String> ensurePermissions() async {
+    if (kIsWeb) {
+      _status = 'n/a (web)';
+      return _status;
+    }
+    try {
+      if (defaultTargetPlatform == TargetPlatform.android) {
+        final scan = await Permission.bluetoothScan.request();
+        final advert = await Permission.bluetoothAdvertise.request();
+        final connect = await Permission.bluetoothConnect.request();
+        final location = await Permission.locationWhenInUse.request();
+        final denied = [
+          if (!scan.isGranted) 'SCAN',
+          if (!advert.isGranted) 'ADVERT',
+          if (!connect.isGranted) 'CONNECT',
+          if (!location.isGranted) 'LOCATION',
+        ];
+        _status = denied.isEmpty
+            ? 'permissions granted'
+            : 'missing: ${denied.join(', ')}';
+      } else {
+        _status = 'no runtime perms (bluez/desktop)';
+      }
+    } catch (e) {
+      _status = 'perm error: $e';
+    }
+    return _status;
+  }
+
+  @override
   Future<void> start() async {
+    await ensurePermissions();
     await _startScanning();
     await _startAdvertising();
     _dutyCycleTimer = Timer.periodic(const Duration(seconds: 6), (_) {

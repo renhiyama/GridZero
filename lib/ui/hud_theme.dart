@@ -1,74 +1,121 @@
-/// OLED cyber-industrial HUD theme (FEAT-UI-01): black canvas, phosphor
-/// green/amber accents, 1px structural borders and glowing halos.
+/// OLED cyber-industrial HUD theme (FEAT-UI-01).
+///
+/// Structure (grid lines, 1px borders, monospace, glowing halos) is fixed;
+/// the accent palette is generated from a user-selected seed colour — either
+/// the platform's Material You colour (Android 12+) or a manual pick. Only
+/// the accent set changes, not full Material You theming.
 library;
 
 import 'package:flutter/material.dart';
 
-abstract final class HudColors {
-  static const Color bg = Color(0xFF000805);
-  static const Color panel = Color(0xFF04120C);
-  static const Color grid = Color(0xFF0A2A1C);
-  static const Color primary = Color(0xFF00FF9C);
-  static const Color primaryDim = Color(0xFF007A4D);
-  static const Color amber = Color(0xFFFFB300);
-  static const Color alert = Color(0xFFFF3B30);
-  static const Color cyan = Color(0xFF00E5FF);
-  static const Color text = Color(0xFFBFEED9);
-  static const Color textDim = Color(0xFF4E7A64);
+/// Resolved palette for the current theme/brightness. Widgets read this via
+/// [AppPalette.of] instead of hard-coding the original green.
+class AppPalette {
+  const AppPalette({
+    required this.primary,
+    required this.primaryDim,
+    required this.secondary,
+    required this.error,
+    required this.bg,
+    required this.panel,
+    required this.grid,
+    required this.text,
+    required this.textDim,
+  });
+
+  final Color primary;
+  final Color primaryDim;
+  final Color secondary;
+  final Color error;
+  final Color bg;
+  final Color panel;
+  final Color grid;
+  final Color text;
+  final Color textDim;
+
+  static AppPalette of(BuildContext context) {
+    final s = Theme.of(context).colorScheme;
+    final dark = s.brightness == Brightness.dark;
+    return AppPalette(
+      primary: s.primary,
+      primaryDim: s.primary.withValues(alpha: dark ? 0.5 : 0.6),
+      secondary: s.secondary,
+      error: s.error,
+      bg: dark ? const Color(0xFF000805) : const Color(0xFFF2F8F5),
+      panel: dark ? const Color(0xFF04120C) : const Color(0xFFEAF4EF),
+      grid: dark ? const Color(0xFF0A2A1C) : const Color(0xFFCFE3D8),
+      text: dark ? const Color(0xFFBFEED9) : const Color(0xFF0B2218),
+      textDim: dark ? const Color(0xFF4E7A64) : const Color(0xFF5C7A6C),
+    );
+  }
 }
 
+/// Default seed used before any user selection (legacy AapadSetu green).
+const Color kDefaultSeed = Color(0xFF00FF9C);
+
 abstract final class HudTheme {
-  static ThemeData get dark {
-    final base = ThemeData.dark(useMaterial3: true);
+  static ThemeData dark = build(seed: kDefaultSeed, brightness: Brightness.dark);
+
+  static ThemeData build({
+    required Color seed,
+    required Brightness brightness,
+  }) {
+    final scheme = ColorScheme.fromSeed(seedColor: seed, brightness: brightness);
+    final dark = brightness == Brightness.dark;
+    final base = ThemeData(
+      useMaterial3: true,
+      brightness: brightness,
+      colorScheme: scheme,
+    );
     return base.copyWith(
-      scaffoldBackgroundColor: HudColors.bg,
-      colorScheme: base.colorScheme.copyWith(
-        primary: HudColors.primary,
-        secondary: HudColors.amber,
-        surface: HudColors.panel,
-      ),
+      scaffoldBackgroundColor:
+          dark ? const Color(0xFF000805) : const Color(0xFFF2F8F5),
       splashFactory: NoSplash.splashFactory,
-      dividerColor: HudColors.primaryDim,
+      dividerColor: scheme.primary.withValues(alpha: 0.4),
       textTheme: base.textTheme.apply(
         fontFamily: 'monospace',
-        bodyColor: HudColors.text,
-        displayColor: HudColors.text,
+        bodyColor: dark ? const Color(0xFFBFEED9) : const Color(0xFF0B2218),
+        displayColor: dark ? const Color(0xFFBFEED9) : const Color(0xFF0B2218),
       ),
-      appBarTheme: const AppBarTheme(
-        backgroundColor: HudColors.bg,
+      appBarTheme: AppBarTheme(
+        backgroundColor:
+            dark ? const Color(0xFF000805) : const Color(0xFFF2F8F5),
         elevation: 0,
         titleTextStyle: TextStyle(
-          color: HudColors.primary,
+          color: scheme.primary,
           fontFamily: 'monospace',
           fontSize: 16,
           letterSpacing: 2,
         ),
-        iconTheme: IconThemeData(color: HudColors.primary),
+        iconTheme: IconThemeData(color: scheme.primary),
       ),
-      inputDecorationTheme: const InputDecorationTheme(
+      inputDecorationTheme: InputDecorationTheme(
         isDense: true,
         border: OutlineInputBorder(
-          borderSide: BorderSide(color: HudColors.primaryDim),
+          borderSide: BorderSide(color: scheme.primary.withValues(alpha: 0.5)),
         ),
         enabledBorder: OutlineInputBorder(
-          borderSide: BorderSide(color: HudColors.primaryDim),
+          borderSide: BorderSide(color: scheme.primary.withValues(alpha: 0.5)),
         ),
         focusedBorder: OutlineInputBorder(
-          borderSide: BorderSide(color: HudColors.primary),
+          borderSide: BorderSide(color: scheme.primary),
         ),
-        labelStyle: TextStyle(color: HudColors.textDim),
+        labelStyle: TextStyle(
+          color: dark ? const Color(0xFF4E7A64) : const Color(0xFF5C7A6C),
+        ),
       ),
       filledButtonTheme: FilledButtonThemeData(
         style: FilledButton.styleFrom(
-          backgroundColor: HudColors.primary,
-          foregroundColor: HudColors.bg,
+          backgroundColor: scheme.primary,
+          foregroundColor: dark ? const Color(0xFF000805) : Colors.white,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.zero),
         ),
       ),
-      tabBarTheme: const TabBarThemeData(
-        labelColor: HudColors.primary,
-        unselectedLabelColor: HudColors.textDim,
-        indicatorColor: HudColors.primary,
+      tabBarTheme: TabBarThemeData(
+        labelColor: scheme.primary,
+        unselectedLabelColor:
+            dark ? const Color(0xFF4E7A64) : const Color(0xFF5C7A6C),
+        indicatorColor: scheme.primary,
       ),
     );
   }
@@ -84,11 +131,12 @@ class HudPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = borderColor ?? HudColors.primaryDim;
+    final p = AppPalette.of(context);
+    final color = borderColor ?? p.primaryDim;
     return Container(
       decoration: BoxDecoration(
         border: Border.all(color: color, width: 1),
-        color: HudColors.panel.withValues(alpha: 0.6),
+        color: p.panel.withValues(alpha: 0.6),
         boxShadow: [
           BoxShadow(color: color.withValues(alpha: 0.18), blurRadius: 6),
         ],
@@ -101,11 +149,7 @@ class HudPanel extends StatelessWidget {
           if (title != null) ...[
             Row(
               children: [
-                Container(
-                  width: 6,
-                  height: 6,
-                  color: color,
-                ),
+                Container(width: 6, height: 6, color: color),
                 const SizedBox(width: 6),
                 Text(
                   title!,
@@ -133,26 +177,27 @@ class HduReadout extends StatelessWidget {
     this.label,
     this.value, {
     super.key,
-    this.color = HudColors.primary,
+    this.color,
     this.valueColor,
   });
 
   final String label;
   final String value;
-  final Color color;
+  final Color? color;
   final Color? valueColor;
 
   @override
   Widget build(BuildContext context) {
+    final p = AppPalette.of(context);
     return RichText(
       text: TextSpan(
         style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
         children: [
-          TextSpan(text: '$label: ', style: TextStyle(color: HudColors.textDim)),
+          TextSpan(text: '$label: ', style: TextStyle(color: p.textDim)),
           TextSpan(
             text: value,
             style: TextStyle(
-              color: valueColor ?? color,
+              color: valueColor ?? color ?? p.primary,
               fontWeight: FontWeight.bold,
             ),
           ),
@@ -164,26 +209,27 @@ class HduReadout extends StatelessWidget {
 
 /// Blinking warning strip for anti-fraud alerts.
 class HudAlertBar extends StatelessWidget {
-  const HudAlertBar(this.message, {super.key, this.color = HudColors.alert});
+  const HudAlertBar(this.message, {super.key, this.color});
 
   final String message;
-  final Color color;
+  final Color? color;
 
   @override
   Widget build(BuildContext context) {
+    final c = color ?? AppPalette.of(context).error;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
       decoration: BoxDecoration(
-        border: Border.all(color: color),
-        color: color.withValues(alpha: 0.12),
+        border: Border.all(color: c),
+        color: c.withValues(alpha: 0.12),
         boxShadow: [
-          BoxShadow(color: color.withValues(alpha: 0.35), blurRadius: 8),
+          BoxShadow(color: c.withValues(alpha: 0.35), blurRadius: 8),
         ],
       ),
       child: Text(
         '!! $message',
         style: TextStyle(
-          color: color,
+          color: c,
           fontFamily: 'monospace',
           fontWeight: FontWeight.bold,
           fontSize: 12,

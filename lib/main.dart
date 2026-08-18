@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 
+import 'package:dynamic_color/dynamic_color.dart';
 import 'package:flutter/material.dart';
 
 import 'app_scope.dart';
@@ -28,14 +29,31 @@ class AapadSetuApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return AppScope(
-      state: state,
-      child: MaterialApp(
-        title: 'AapadSetu / आपदसेतु',
-        debugShowCheckedModeBanner: false,
-        theme: HudTheme.dark,
-        home: const ModeShell(),
-      ),
+    return DynamicColorBuilder(
+      builder: (lightDynamic, darkDynamic) {
+        return AppScope(
+          state: state,
+          child: ListenableBuilder(
+            listenable: state,
+            builder: (context, _) {
+              // Pull only the primary colour from the platform's Material You
+              // scheme; the rest of the HUD structure stays ours.
+              final seed = state.useSystemDynamic && lightDynamic != null
+                  ? lightDynamic.primary
+                  : state.seedColor;
+              return MaterialApp(
+                title: 'AapadSetu / आपदसेतु',
+                debugShowCheckedModeBanner: false,
+                theme: HudTheme.build(seed: seed, brightness: Brightness.light),
+                darkTheme:
+                    HudTheme.build(seed: seed, brightness: Brightness.dark),
+                themeMode: state.themeMode,
+                home: const ModeShell(),
+              );
+            },
+          ),
+        );
+      },
     );
   }
 }

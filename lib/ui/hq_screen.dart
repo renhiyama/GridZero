@@ -42,6 +42,7 @@ class _HqScreenState extends State<HqScreen> {
   @override
   Widget build(BuildContext context) {
     final app = AppScope.of(context);
+    final p = AppPalette.of(context);
     final simActive = _sim != null && _sim!.adapter == app.mesh.adapter;
 
     return SafeArea(
@@ -52,10 +53,10 @@ class _HqScreenState extends State<HqScreen> {
             padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
             child: Row(
               children: [
-                const Text(
+                Text(
                   '▚▞ COMMAND HQ',
                   style: TextStyle(
-                    color: HudColors.primary,
+                    color: p.primary,
                     fontFamily: 'monospace',
                     fontSize: 16,
                     letterSpacing: 3,
@@ -67,13 +68,13 @@ class _HqScreenState extends State<HqScreen> {
                   padding: const EdgeInsets.symmetric(
                       horizontal: 6, vertical: 2),
                   decoration: BoxDecoration(
-                    border: Border.all(color: HudColors.primary),
-                    color: HudColors.primary.withValues(alpha: 0.12),
+                    border: Border.all(color: p.primary),
+                    color: p.primary.withValues(alpha: 0.12),
                   ),
                   child: Text(
                     simActive ? 'LIVE SIMULATOR' : 'LIVE GATEWAY BRIDGE',
-                    style: const TextStyle(
-                      color: HudColors.primary,
+                    style: TextStyle(
+                      color: p.primary,
                       fontFamily: 'monospace',
                       fontSize: 11,
                       letterSpacing: 1,
@@ -90,7 +91,9 @@ class _HqScreenState extends State<HqScreen> {
                 final telemetry = _TelemetryPanel(app: app);
                 final simulatorPanel =
                     _SimulatorPanel(app: app, simActive: simActive);
-                final heatmap = _HeatmapPanel(nodes: app.mesh.nodes.values.toList());
+                final heatmap = _HeatmapPanel(
+                    nodes: app.mesh.nodes.values.toList(),
+                    palette: AppPalette.of(context));
                 final logs = _LogsPanel(app: app);
 
                 if (wide) {
@@ -144,6 +147,7 @@ class _TelemetryPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final p = AppPalette.of(context);
     final nodes = (app.mesh.nodes.values as Iterable<MeshNodeState>).toList();
     final sosCount = nodes.where((MeshNodeState n) => n.hasSos).length;
     return HudPanel(
@@ -157,7 +161,7 @@ class _TelemetryPanel extends StatelessWidget {
             HduReadout('FRAMES RELAYED', '${app.mesh.framesRelayed}'),
             HduReadout('KNOWN NODES', '${nodes.length}'),
             HduReadout('ACTIVE SOS BEACONS', '$sosCount',
-                color: sosCount > 0 ? HudColors.alert : HudColors.primary),
+                color: sosCount > 0 ? p.error : p.primary),
             HduReadout('RATIONS ALLOCATED', '${app.claimCount}'),
             HduReadout('LEDGER RECORDS',
                 '${snapshot.data ?? '…'}'),
@@ -183,6 +187,7 @@ class _SimulatorPanel extends StatefulWidget {
 class _SimulatorPanelState extends State<_SimulatorPanel> {
   @override
   Widget build(BuildContext context) {
+    final p = AppPalette.of(context);
     final app = widget.app;
     final hq = context.findAncestorStateOfType<_HqScreenState>()!;
     return HudPanel(
@@ -192,7 +197,7 @@ class _SimulatorPanelState extends State<_SimulatorPanel> {
         children: [
           Row(
             children: [
-              Text('NODES', style: TextStyle(color: HudColors.textDim, fontFamily: 'monospace')),
+              Text('NODES', style: TextStyle(color: p.textDim, fontFamily: 'monospace')),
               const SizedBox(width: 8),
               Expanded(
                 child: Slider(
@@ -200,14 +205,14 @@ class _SimulatorPanelState extends State<_SimulatorPanel> {
                   min: 20,
                   max: 50,
                   divisions: 30,
-                  activeColor: HudColors.primary,
+                  activeColor: p.primary,
                   label: '${hq._nodeCount}',
                   onChanged: (v) => setState(() => hq._nodeCount = v.round()),
                 ),
               ),
               Text('${hq._nodeCount}',
-                  style: const TextStyle(
-                      color: HudColors.primary, fontFamily: 'monospace')),
+                  style: TextStyle(
+                      color: p.primary, fontFamily: 'monospace')),
             ],
           ),
           Row(
@@ -250,9 +255,7 @@ class _SimulatorPanelState extends State<_SimulatorPanel> {
             app.mesh.adapter.isSimulated
                 ? 'SIMULATED TRANSPORT'
                 : 'NATIVE BLE (simulator needs simulated transport)',
-            color: app.mesh.adapter.isSimulated
-                ? HudColors.primary
-                : HudColors.amber,
+            color: app.mesh.adapter.isSimulated ? p.primary : p.secondary,
           ),
         ],
       ),
@@ -261,9 +264,10 @@ class _SimulatorPanelState extends State<_SimulatorPanel> {
 }
 
 class _HeatmapPanel extends StatelessWidget {
-  const _HeatmapPanel({required this.nodes});
+  const _HeatmapPanel({required this.nodes, required this.palette});
 
   final List<MeshNodeState> nodes;
+  final AppPalette palette;
 
   @override
   Widget build(BuildContext context) {
@@ -272,7 +276,7 @@ class _HeatmapPanel extends StatelessWidget {
       child: SizedBox(
         height: 220,
         child: CustomPaint(
-          painter: _HeatmapPainter(nodes: nodes),
+          painter: _HeatmapPainter(nodes: nodes, palette: palette),
           size: Size.infinite,
         ),
       ),
@@ -281,9 +285,10 @@ class _HeatmapPanel extends StatelessWidget {
 }
 
 class _HeatmapPainter extends CustomPainter {
-  _HeatmapPainter({required this.nodes});
+  _HeatmapPainter({required this.nodes, required this.palette});
 
   final List<MeshNodeState> nodes;
+  final AppPalette palette;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -308,21 +313,21 @@ class _HeatmapPainter extends CustomPainter {
         canvas.drawRect(
           cell,
           Paint()
-            ..color = Color.lerp(HudColors.panel, HudColors.alert, alpha)!,
+            ..color = Color.lerp(palette.panel, palette.error, alpha)!,
         );
         canvas.drawRect(
           cell,
           Paint()
-            ..color = HudColors.grid
+            ..color = palette.grid
             ..style = PaintingStyle.stroke,
         );
       }
     }
 
     final tp = TextPainter(
-      text: const TextSpan(
+      text: TextSpan(
         text: 'SOS DENSITY / SECTOR GRID',
-        style: TextStyle(color: HudColors.textDim, fontFamily: 'monospace', fontSize: 10),
+        style: TextStyle(color: palette.textDim, fontFamily: 'monospace', fontSize: 10),
       ),
       textDirection: TextDirection.ltr,
     )..layout();
@@ -331,7 +336,8 @@ class _HeatmapPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _HeatmapPainter oldDelegate) =>
-      oldDelegate.nodes.length != nodes.length;
+      oldDelegate.nodes.length != nodes.length ||
+      oldDelegate.palette.error != palette.error;
 }
 
 class _LogsPanel extends StatelessWidget {
@@ -341,6 +347,7 @@ class _LogsPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final p = AppPalette.of(context);
     return FutureBuilder<List<LedgerRecord>>(
       future: app.ledger.allRecords(),
       builder: (context, snapshot) {
@@ -359,8 +366,8 @@ class _LogsPanel extends StatelessWidget {
                           '[${r.claimedAt}] ${r.citizenId} → '
                           '${r.rationCode} by ${r.officerId} '
                           '·${r.currentHash.substring(0, 8)}',
-                          style: const TextStyle(
-                            color: HudColors.text,
+                          style: TextStyle(
+                            color: p.text,
                             fontFamily: 'monospace',
                             fontSize: 10,
                           ),

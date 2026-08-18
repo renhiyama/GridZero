@@ -19,7 +19,13 @@ class SimulatedMeshAdapter implements MeshAdapter {
   String get name => 'SIM';
 
   @override
+  String get status => 'simulated transport — no radio, no permissions';
+
+  @override
   bool get isSimulated => true;
+
+  @override
+  Future<String> ensurePermissions() async => status;
 
   @override
   Stream<MeshRxPacket> get onPacket => _rx.stream;

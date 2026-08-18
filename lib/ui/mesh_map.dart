@@ -112,7 +112,7 @@ class _MeshMapState extends State<MeshMap> {
               ),
               TileLayer(
                 urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                userAgentPackageName: 'org.aapadsetu.aapadsetu',
+                userAgentPackageName: 'org.gridzero.gridzero',
               ),
               MarkerLayer(
                 markers: [

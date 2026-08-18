@@ -1,5 +1,5 @@
-name: aapadsetu
-description: "AapadSetu (आपदसेतु) — air-gapped disaster relief & P2P triage: BLE mesh, dynamic TOTP ration QR, hash-chain ledger, Command HQ."
+name: gridzero
+description: "GridZero — air-gapped disaster relief & P2P triage: BLE mesh, dynamic TOTP ration QR, hash-chain ledger, Command HQ."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev

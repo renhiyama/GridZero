@@ -21,7 +21,7 @@ import 'package:permission_handler/permission_handler.dart';
 import '../mesh_packet.dart';
 import 'mesh_adapter.dart';
 
-/// Custom company identifier for AapadSetu manufacturer-data frames.
+/// Custom company identifier for GridZero manufacturer-data frames.
 const int kMeshCompanyId = 0xffff;
 
 /// How long each scan window runs before the radio sleeps again.
@@ -143,7 +143,7 @@ class NativeMeshAdapter implements MeshAdapter {
     } catch (e) {
       _scanning = false;
       _scanError = '$e';
-      debugPrint('AapadSetu: scan window failed: $_scanError');
+      debugPrint('GridZero: scan window failed: $_scanError');
       _scheduleScanCycle();
     }
   }
@@ -155,7 +155,7 @@ class NativeMeshAdapter implements MeshAdapter {
       await _runScanWindow();
     } catch (e) {
       _scanError = '$e';
-      debugPrint('AapadSetu: BLE scan unavailable: $_scanError');
+      debugPrint('GridZero: BLE scan unavailable: $_scanError');
     }
   }
 
@@ -181,7 +181,7 @@ class NativeMeshAdapter implements MeshAdapter {
     _advertising = advertising;
     if (error != null) {
       _advertisingError = error;
-      debugPrint('AapadSetu: BLE advertising failed: $error');
+      debugPrint('GridZero: BLE advertising failed: $error');
       if (_advRetries < 3) {
         _advRetries++;
         _advRetryTimer?.cancel();
@@ -214,7 +214,7 @@ class NativeMeshAdapter implements MeshAdapter {
     } catch (e) {
       _advertising = false;
       _advertisingError = '$e';
-      debugPrint('AapadSetu: BLE advertising unavailable: $e');
+      debugPrint('GridZero: BLE advertising unavailable: $e');
     }
   }
 

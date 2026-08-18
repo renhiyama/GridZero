@@ -7,7 +7,7 @@ import 'package:crypto/crypto.dart';
 
 /// Shared genesis anchor so every chain starts from the same root hash.
 final String genesisHash = sha256
-    .convert(utf8.encode('AapadSetu-Genesis-Anchored'))
+    .convert(utf8.encode('GridZero-Genesis-Anchored'))
     .toString();
 
 class LedgerRecord {

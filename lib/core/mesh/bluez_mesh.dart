@@ -88,7 +88,7 @@ class BluezMeshAdapter implements MeshAdapter {
       }
     } catch (e) {
       _error = '$e';
-      debugPrint('AapadSetu: bluez unavailable: $e');
+      debugPrint('GridZero: bluez unavailable: $e');
     }
   }
 
@@ -101,7 +101,7 @@ class BluezMeshAdapter implements MeshAdapter {
       }
     } catch (e) {
       _error = 'power: $e';
-      debugPrint('AapadSetu: bluez power-on failed: $e');
+      debugPrint('GridZero: bluez power-on failed: $e');
     }
     // Duty cycle: a single radio cannot transmit its own advertisement while
     // scanning full-time on controllers without concurrent adv+scan support.
@@ -117,7 +117,7 @@ class BluezMeshAdapter implements MeshAdapter {
       await _adapter!.startDiscovery();
     } catch (e) {
       _error = 'discovery: $e';
-      debugPrint('AapadSetu: bluez discovery failed: $e');
+      debugPrint('GridZero: bluez discovery failed: $e');
     }
     _dutyCycleTimer = Timer(_jittered(_scanWindowDuration), _sleepWindow);
   }
@@ -176,7 +176,7 @@ class BluezMeshAdapter implements MeshAdapter {
       _advDirty = false;
     } catch (e) {
       _error = 'adv: $e';
-      debugPrint('AapadSetu: bluez advertising failed: $e');
+      debugPrint('GridZero: bluez advertising failed: $e');
     }
   }
 
@@ -200,17 +200,17 @@ class BluezMeshAdapter implements MeshAdapter {
       await _startAdvertising();
       if (_advertising) {
         debugPrint(
-          'AapadSetu: adv rotated to ${payload.length}B frame '
+          'GridZero: adv rotated to ${payload.length}B frame '
           '(sender ${packet.senderId.toRadixString(16).toUpperCase()})',
         );
       } else {
         // Registration rejected (e.g. radio busy mid-scan window); the idle
         // window retries it when the radio is quiet.
-        debugPrint('AapadSetu: adv registration deferred to idle window');
+        debugPrint('GridZero: adv registration deferred to idle window');
       }
     } catch (e) {
       _advDirty = true;
-      debugPrint('AapadSetu: bluez advertise rotation failed: $e');
+      debugPrint('GridZero: bluez advertise rotation failed: $e');
     }
   }
 

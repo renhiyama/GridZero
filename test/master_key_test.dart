@@ -1,4 +1,4 @@
-import 'package:aapadsetu/core/master_key.dart';
+import 'package:gridzero/core/master_key.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

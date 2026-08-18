@@ -17,7 +17,7 @@ Future<LedgerStore> openLedgerStore() async {
     final dir = await getApplicationSupportDirectory();
     final store = await SqliteLedgerStore.open(
       databaseFactoryFfi,
-      '${dir.path}/aapadsetu_ledger.db',
+      '${dir.path}/gridzero_ledger.db',
     );
     return store;
   } catch (_) {

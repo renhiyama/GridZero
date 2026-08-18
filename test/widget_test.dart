@@ -1,9 +1,9 @@
-import 'package:aapadsetu/app_scope.dart';
-import 'package:aapadsetu/core/app_state.dart';
-import 'package:aapadsetu/core/master_key.dart';
-import 'package:aapadsetu/ui/hud_theme.dart';
-import 'package:aapadsetu/ui/login_screen.dart';
-import 'package:aapadsetu/ui/shell.dart';
+import 'package:gridzero/app_scope.dart';
+import 'package:gridzero/core/app_state.dart';
+import 'package:gridzero/core/master_key.dart';
+import 'package:gridzero/ui/hud_theme.dart';
+import 'package:gridzero/ui/login_screen.dart';
+import 'package:gridzero/ui/shell.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:qr_flutter/qr_flutter.dart';

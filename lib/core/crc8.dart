@@ -1,6 +1,6 @@
 /// CRC-8 with polynomial x^8 + x^2 + x + 1 (0x07), init 0, no reflection.
 ///
-/// Used to guard the 18-byte AapadSetu BLE mesh frame. Kept table-less so the
+/// Used to guard the 18-byte GridZero BLE mesh frame. Kept table-less so the
 /// primitive is trivial to audit and constant-time on the wire.
 library;
 

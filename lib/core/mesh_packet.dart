@@ -1,4 +1,4 @@
-/// AapadSetu 22-byte BLE mesh frame codec.
+/// GridZero 22-byte BLE mesh frame codec.
 ///
 /// Layout (from docs/REQ.md section 2.1):
 ///   Byte 0     MAGIC       0xA5

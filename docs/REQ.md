@@ -1,6 +1,6 @@
-AapadSetu (आपदसेतु) — Unified Product Requirements Document (PRD) & Software Requirements Specification (SRS)
+GridZero — Unified Product Requirements Document (PRD) & Software Requirements Specification (SRS)
 
-Project Name: AapadSetu (ResQMesh / RahatMesh)
+Project Name: GridZero (ResQMesh / RahatMesh)
 
 System Type: Air-Gapped Disaster Relief & Peer-to-Peer Triage System
 
@@ -20,7 +20,7 @@ Communication Blackouts: Trapped citizens and field teams cannot communicate due
 
 Relief Supply Fraud & Chaos: Ration distribution centers lack real-time or offline verification, leading to double-dipping, hoarded supplies, and unverified aid claims.
 
-AapadSetu bridges these gaps by combining a peer-to-peer Bluetooth Low Energy (BLE) mesh network with offline cryptographic dynamic QR verification, packaged inside a single adaptive Flutter codebase. It operates entirely air-gapped on standard consumer smartphones and ruggedized field tablets, while compiling seamlessly to a Web Command HQ Dashboard for real-time triage visualizer and judge demonstrations.
+GridZero bridges these gaps by combining a peer-to-peer Bluetooth Low Energy (BLE) mesh network with offline cryptographic dynamic QR verification, packaged inside a single adaptive Flutter codebase. It operates entirely air-gapped on standard consumer smartphones and ruggedized field tablets, while compiling seamlessly to a Web Command HQ Dashboard for real-time triage visualizer and judge demonstrations.
 
 2. User Personas & Scenarios
 
@@ -30,7 +30,7 @@ Context: Trapped in a flood zone with no cellular network or internet connection
 
 Goal: Broadcast an SOS triage beacon (medical, food, water needs) and securely claim daily ration allocations at a local relief camp without needing an active data connection.
 
-Key Interaction: Opens AapadSetu in default Citizen Mode, sets emergency status, broadcasts BLE beacon, and presents a dynamic offline QR code at relief distribution points.
+Key Interaction: Opens GridZero in default Citizen Mode, sets emergency status, broadcasts BLE beacon, and presents a dynamic offline QR code at relief distribution points.
 
 Persona B: Field Relief Officer / NDRF Responder (Priya)
 
@@ -51,7 +51,7 @@ Key Interaction: Views the Web Command HQ Visualizer, switching between a live g
 3. Unified Delivery & Deployment Architecture
 
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                       AapadSetu Single Unified Codebase                     │
+│                       GridZero Single Unified Codebase                     │
 │                                 (lib/main.dart)                             │
 └──────────────────────────────────────┬──────────────────────────────────────┘
                                        │
@@ -249,7 +249,7 @@ MAGIC
 
 uint8
 
-Fixed constant 0xA5 identifying AapadSetu protocol frames.
+Fixed constant 0xA5 identifying GridZero protocol frames.
 
 Byte 1
 

@@ -63,7 +63,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Text(
-                    'AAPADSETU',
+                    'GRIDZERO',
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       color: p.primary,
@@ -75,7 +75,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    'आपदसेतु · air-gapped relief mesh',
+                    'grid-zero · air-gapped relief mesh',
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       color: p.textDim,

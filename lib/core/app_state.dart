@@ -61,7 +61,7 @@ class AppState extends ChangeNotifier {
   String _citizenId = '';
   String get citizenId => _citizenId;
   List<int> get citizenKey =>
-      sha256.convert(utf8.encode('aapadsetu:citizen:$_citizenId')).bytes;
+      sha256.convert(utf8.encode('gridzero:citizen:$_citizenId')).bytes;
 
   late LedgerStore ledger;
   MeshController? mesh;
@@ -122,12 +122,12 @@ class AppState extends ChangeNotifier {
   }
 
   static String _hashPassword(String password) =>
-      sha256.convert(utf8.encode('aapadsetu:pw:$password')).toString();
+      sha256.convert(utf8.encode('gridzero:pw:$password')).toString();
 
   /// Deterministic per-account identity: stable across logins so peers never
   /// see this device as a new node, and identical on this phone after a
   /// "Delete All Data & Logout" + re-register with the same username.
-  String _seed() => 'aapadsetu:mesh:$username';
+  String _seed() => 'gridzero:mesh:$username';
 
   static String _freshCitizenId(String seed) =>
       'CIT-${sha256.convert(utf8.encode(seed)).toString().substring(0, 8).toUpperCase()}';
@@ -432,7 +432,7 @@ class AppState extends ChangeNotifier {
       return ClaimResult(ClaimStatus.error, message: 'claim QR missing fields');
     }
     final key = sha256
-        .convert(utf8.encode('aapadsetu:citizen:$citizenIdFromQr'))
+        .convert(utf8.encode('gridzero:citizen:$citizenIdFromQr'))
         .bytes;
     final valid = totpVerify(
       citizenId: citizenIdFromQr,

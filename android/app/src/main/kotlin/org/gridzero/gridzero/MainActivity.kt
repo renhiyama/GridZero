@@ -1,4 +1,4 @@
-package org.aapadsetu.aapadsetu
+package org.gridzero.gridzero
 
 import io.flutter.embedding.android.FlutterActivity
 

@@ -32,11 +32,11 @@ Future<void> main() async {
     }
   });
 
-  runApp(AapadSetuApp(state: state));
+  runApp(GridZeroApp(state: state));
 }
 
-class AapadSetuApp extends StatelessWidget {
-  const AapadSetuApp({super.key, required this.state});
+class GridZeroApp extends StatelessWidget {
+  const GridZeroApp({super.key, required this.state});
 
   final AppState state;
 
@@ -55,7 +55,7 @@ class AapadSetuApp extends StatelessWidget {
                   ? lightDynamic.primary
                   : state.seedColor;
               return MaterialApp(
-                title: 'AapadSetu / आपदसेतु',
+                title: 'GridZero',
                 debugShowCheckedModeBanner: false,
                 theme: HudTheme.build(seed: seed, brightness: Brightness.light),
                 darkTheme: HudTheme.build(

@@ -1,7 +1,7 @@
 import 'dart:async';
 
-import 'package:aapadsetu/core/mesh/mesh_adapter.dart';
-import 'package:aapadsetu/core/mesh_packet.dart';
+import 'package:gridzero/core/mesh/mesh_adapter.dart';
+import 'package:gridzero/core/mesh_packet.dart';
 
 /// Test-only transport: an empty radio that echoes own broadcasts back like
 /// an instant loopback. Nothing is generated, nothing leaks — tests feed

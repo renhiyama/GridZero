@@ -50,7 +50,7 @@ class AppPalette {
   }
 }
 
-/// Default seed used before any user selection (legacy AapadSetu green).
+/// Default seed used before any user selection (legacy GridZero green).
 const Color kDefaultSeed = Color(0xFF00FF9C);
 
 /// Natural-English people count: '1 person', '2 people'.

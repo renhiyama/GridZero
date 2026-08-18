@@ -325,7 +325,7 @@ class SettingsScreen extends StatelessWidget {
                 HudPanel(
                   title: 'ABOUT',
                   child: const HduReadout(
-                    'AAPADSETU',
+                    'GRIDZERO',
                     'air-gapped relief mesh · v1',
                   ),
                 ),

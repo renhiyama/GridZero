@@ -36,6 +36,7 @@ class BluezMeshAdapter implements MeshAdapter {
   Timer? _dutyCycleTimer;
   bool _scanOn = false;
   bool _advertising = false;
+  bool _advDirty = false;
   String? _error;
   final _seenPeers = <int>{};
 
@@ -117,6 +118,9 @@ class BluezMeshAdapter implements MeshAdapter {
     } catch (_) {
       // Discovery may already be stopped.
     }
+    // Radio is idle now: a good moment to (re)register the advertisement if
+    // a broadcast was deferred during a scan window.
+    await _retryAdvertising();
     _dutyCycleTimer = Timer(_sleepWindowDuration, _scanWindow);
   }
 
@@ -157,6 +161,7 @@ class BluezMeshAdapter implements MeshAdapter {
         },
       );
       _advertising = true;
+      _advDirty = false;
     } catch (e) {
       _error = 'adv: $e';
       debugPrint('AapadSetu: bluez advertising failed: $e');
@@ -171,14 +176,36 @@ class BluezMeshAdapter implements MeshAdapter {
     if (!_advertising || !changed) return;
     try {
       final advert = _advert;
+      // Clear the guard BEFORE unregistering, or the re-register below would
+      // no-op and the radio would silently go dark after the first payload
+      // change (the one-way mesh bug).
+      _advertising = false;
+      _advert = null;
       if (advert != null) {
         await _adapter!.advertisingManager.unregisterAdvertisement(advert);
       }
-      _advert = null;
+      _advDirty = true;
       await _startAdvertising();
+      if (_advertising) {
+        debugPrint(
+          'AapadSetu: adv rotated to ${payload.length}B frame '
+          '(sender ${packet.senderId.toRadixString(16).toUpperCase()})',
+        );
+      } else {
+        // Registration rejected (e.g. radio busy mid-scan window); the idle
+        // window retries it when the radio is quiet.
+        debugPrint('AapadSetu: adv registration deferred to idle window');
+      }
     } catch (e) {
+      _advDirty = true;
       debugPrint('AapadSetu: bluez advertise rotation failed: $e');
     }
+  }
+
+  Future<void> _retryAdvertising() async {
+    if (!_advDirty) return;
+    _advDirty = false;
+    await _startAdvertising();
   }
 
   @override

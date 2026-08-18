@@ -44,6 +44,20 @@ class AppState extends ChangeNotifier {
   int _claimSeq = 0;
   bool initialized = false;
 
+  /// Tab switch requested by a deep link or notification tap; the shell
+  /// consumes it and resets it to null.
+  final ValueNotifier<int?> navRequest = ValueNotifier<int?>(null);
+
+  /// Node id the HQ map should fly to after a notification tap.
+  int? sosFocusId;
+
+  /// Notification tap target: jump to the HQ tab and focus the SOS node.
+  void openSos(String nodeIdHex) {
+    final id = int.tryParse(nodeIdHex, radix: 16);
+    if (id != null) sosFocusId = id;
+    navRequest.value = 2; // ModeShell HQ tab
+  }
+
   // ---- appearance ----
   ThemeMode themeMode = ThemeMode.system;
   Color seedColor = const Color(0xFF00FF9C);
@@ -101,8 +115,9 @@ class AppState extends ChangeNotifier {
       }
       final pos = await Geolocator.getCurrentPosition(
         locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.medium,
-          timeLimit: Duration(seconds: 8),
+          // GPS (not cell/wifi): medium accuracy lands you a road off.
+          accuracy: LocationAccuracy.high,
+          timeLimit: Duration(seconds: 10),
         ),
       );
       mesh.setGpsFix(latitude: pos.latitude, longitude: pos.longitude);
@@ -158,6 +173,9 @@ class AppState extends ChangeNotifier {
       _sosTimer = Timer.periodic(const Duration(seconds: 30), (_) {
         mesh.broadcastSos(triage: sosFlags);
       });
+    } else {
+      // One cleared beacon so peers turn the alarm off now, not in 90s.
+      mesh.broadcastSos(triage: sosFlags, cleared: true);
     }
     notifyListeners();
   }

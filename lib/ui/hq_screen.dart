@@ -6,6 +6,7 @@ library;
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:latlong2/latlong.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../app_scope.dart';
@@ -196,9 +197,18 @@ class _FieldMapPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final m = app.mesh;
+    LatLng? focus;
+    final focusId = app.sosFocusId;
+    if (focusId != null) {
+      final node = m.nodes[focusId];
+      if (node != null && node.latitude.abs() > 1e-6) {
+        focus = LatLng(node.latitude, node.longitude);
+      }
+    }
     return HudPanel(
       title: 'FIELD MAP',
-      child: SizedBox(height: 320, child: MeshMap(mesh: app.mesh)),
+      child: SizedBox(height: 320, child: MeshMap(mesh: m, focus: focus)),
     );
   }
 }
@@ -243,14 +253,33 @@ class _HeatmapPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final fixed = nodes
+        .where(
+          (n) =>
+              n.latitude.abs() > 1e-6 &&
+              n.longitude.abs() > 1e-6 &&
+              n.lastSeenEpoch > 0,
+        )
+        .toList();
     return HudPanel(
       title: 'TRIAGE HEATMAP',
       child: SizedBox(
         height: 220,
-        child: CustomPaint(
-          painter: _HeatmapPainter(nodes: nodes, palette: palette),
-          size: Size.infinite,
-        ),
+        child: fixed.isEmpty
+            ? Center(
+                child: Text(
+                  'NO POSITIONS YET — HEAT BUILDS FROM PEOPLE WITH GPS',
+                  style: TextStyle(
+                    color: palette.textDim,
+                    fontFamily: 'monospace',
+                    fontSize: 11,
+                  ),
+                ),
+              )
+            : CustomPaint(
+                painter: _HeatmapPainter(nodes: fixed, palette: palette),
+                size: Size.infinite,
+              ),
       ),
     );
   }
@@ -262,34 +291,65 @@ class _HeatmapPainter extends CustomPainter {
   final List<MeshNodeState> nodes;
   final AppPalette palette;
 
+  /// Two-stage heat dropoff: strong within 100px, faint bleed beyond.
+  static double _dropoff(double d) => d < 20 ? 1 : 0.45 / (1 + (d - 20) / 60);
+
   @override
   void paint(Canvas canvas, Size size) {
+    // Bounds come from the actual mesh, not a hardcoded demo city: compute the
+    // min/max of live coordinates and add a small margin so an SOS cluster is
+    // always visible wherever it happens.
+    double minLat = double.infinity, maxLat = double.negativeInfinity;
+    double minLon = double.infinity, maxLon = double.negativeInfinity;
+    for (final n in nodes) {
+      minLat = n.latitude < minLat ? n.latitude : minLat;
+      maxLat = n.latitude > maxLat ? n.latitude : maxLat;
+      minLon = n.longitude < minLon ? n.longitude : minLon;
+      maxLon = n.longitude > maxLon ? n.longitude : maxLon;
+    }
+    final spanLat = maxLat - minLat;
+    final spanLon = maxLon - minLon;
+    final padLat = spanLat == 0 ? 0.0005 : spanLat * 0.15;
+    final padLon = spanLon == 0 ? 0.0005 : spanLon * 0.15;
+    minLat -= padLat;
+    maxLat += padLat;
+    minLon -= padLon;
+    maxLon += padLon;
+    final spanLat2 = maxLat - minLat;
+    final spanLon2 = maxLon - minLon;
+
+    // Accumulate heat per sector cell.
     const cols = 8;
     const rows = 6;
+    final heat = List<List<double>>.generate(
+      cols,
+      (_) => List<double>.filled(rows, 0),
+    );
+    for (final n in nodes) {
+      final x = (n.longitude - minLon) / spanLon2 * size.width;
+      final y = (maxLat - n.latitude) / spanLat2 * size.height;
+      final strength = n.hasSos ? n.severity * 2.2 : 0.6;
+      for (var c = 0; c < cols; c++) {
+        for (var r = 0; r < rows; r++) {
+          final cx = ((c + 0.5) / cols) * size.width;
+          final cy = ((r + 0.5) / rows) * size.height;
+          final d = (Offset(x, y) - Offset(cx, cy)).distance;
+          heat[c][r] += strength * _dropoff(d);
+        }
+      }
+    }
+
     final cellW = size.width / cols;
     final cellH = size.height / rows;
-
     for (var c = 0; c < cols; c++) {
       for (var r = 0; r < rows; r++) {
-        final cell = Rect.fromLTWH(c * cellW, r * cellH, cellW, cellH);
-        final cx = cell.center.dx;
-        final cy = cell.center.dy;
-        double heat = 0;
-        for (final n in nodes) {
-          // Skip peers without a fix (0,0 sentinel) so they add no heat.
-          if (n.latitude.abs() < 1e-6 && n.longitude.abs() < 1e-6) continue;
-          final nx = (n.longitude - 72.75) / 0.3 * size.width;
-          final ny = (19.20 - n.latitude) / 0.35 * size.height;
-          final d = (Offset(nx, ny) - Offset(cx, cy)).distance;
-          if (d < 40) heat += n.hasSos ? n.severity * 2.2 : 0.6;
-        }
-        final alpha = (heat.clamp(0, 6) / 6).toDouble();
+        final alpha = (heat[c][r].clamp(0, 6) / 6).toDouble();
         canvas.drawRect(
-          cell,
+          Rect.fromLTWH(c * cellW, r * cellH, cellW, cellH),
           Paint()..color = Color.lerp(palette.panel, palette.error, alpha)!,
         );
         canvas.drawRect(
-          cell,
+          Rect.fromLTWH(c * cellW, r * cellH, cellW, cellH),
           Paint()
             ..color = palette.grid
             ..style = PaintingStyle.stroke,
@@ -297,9 +357,20 @@ class _HeatmapPainter extends CustomPainter {
       }
     }
 
+    // Overlay node positions so the heat is tied to actual people.
+    for (final n in nodes) {
+      final x = (n.longitude - minLon) / spanLon2 * size.width;
+      final y = (maxLat - n.latitude) / spanLat2 * size.height;
+      canvas.drawCircle(
+        Offset(x, y),
+        n.hasSos ? 5 : 3,
+        Paint()..color = n.hasSos ? palette.error : palette.primary,
+      );
+    }
+
     final tp = TextPainter(
       text: TextSpan(
-        text: 'SOS DENSITY / SECTOR GRID',
+        text: 'SOS DENSITY / LIVE SECTOR GRID',
         style: TextStyle(
           color: palette.textDim,
           fontFamily: 'monospace',

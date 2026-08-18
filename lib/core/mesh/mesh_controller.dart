@@ -126,12 +126,21 @@ class MeshController {
 
   final _nodeUpdates = StreamController<Map<int, MeshNodeState>>.broadcast();
   final _sos = StreamController<MeshPacket>.broadcast();
+  final _sosStarted = StreamController<MeshNodeState>.broadcast();
+  final _sosEnded = StreamController<MeshNodeState>.broadcast();
+  Timer? _sweepTimer;
 
   /// Latest map of known nodes keyed by node id.
   Stream<Map<int, MeshNodeState>> get nodeUpdates => _nodeUpdates.stream;
 
   /// SOS beacon frames as they are seen or relayed.
   Stream<MeshPacket> get sosStream => _sos.stream;
+
+  /// Fired once when a peer's SOS goes active (transition, not every beacon).
+  Stream<MeshNodeState> get sosStarted => _sosStarted.stream;
+
+  /// Fired when a peer's SOS clears (explicit clear frame or 90s timeout).
+  Stream<MeshNodeState> get sosEnded => _sosEnded.stream;
 
   Map<int, MeshNodeState> get nodes => Map.unmodifiable(_nodes);
 
@@ -148,26 +157,36 @@ class MeshController {
     };
   }
 
-  Future<void> start() => adapter.start();
+  Future<void> start() async {
+    await adapter.start();
+    _sweepTimer = Timer.periodic(const Duration(seconds: 15), (_) => _sweep());
+  }
 
   Future<void> stop() async {
+    _sweepTimer?.cancel();
+    _sweepTimer = null;
     await _adapterSub?.cancel();
     await adapter.stop();
     await _nodeUpdates.close();
     await _sos.close();
+    await _sosStarted.close();
+    await _sosEnded.close();
   }
 
-  /// Builds, sequence-stamps and floods a new local packet.
+  /// Builds, sequence-stamps and floods a new local packet. With
+  /// [cleared] set, the frame tells receivers this node's SOS is now off.
   Future<void> broadcastSos({
     required TriageFlags triage,
     double? latitude,
     double? longitude,
+    bool cleared = false,
   }) {
     final packet = _newPacket(
       MeshPacketType.sosBeacon,
       triage: triage,
       latitude: latitude ?? (gpsFix ? gpsLatitude! : 0),
       longitude: longitude ?? (gpsFix ? gpsLongitude! : 0),
+      flags: cleared ? 1 : 0,
     );
     return broadcast(packet);
   }
@@ -195,6 +214,7 @@ class MeshController {
     required TriageFlags triage,
     required double latitude,
     required double longitude,
+    int flags = 0,
   }) {
     _seq = (_seq + 1) & 0xffff;
     return MeshPacket(
@@ -204,6 +224,7 @@ class MeshController {
       longitude: longitude,
       triage: triage,
       seq: _seq,
+      flags: flags,
     );
   }
 
@@ -219,12 +240,18 @@ class MeshController {
       p.senderId,
       () => MeshNodeState(nodeId: p.senderId),
     );
+    final wasSos = node.hasSos;
     node.updateFrom(rx);
     _approxDirty = true;
     _nodeUpdates.add(Map.of(_nodes));
 
     if (p.type == MeshPacketType.sosBeacon) {
       _sos.add(p);
+      if (p.sosCleared) {
+        if (wasSos) _sosEnded.add(node);
+      } else if (!wasSos && !isOwn) {
+        _sosStarted.add(node);
+      }
     }
 
     // FR-1.3: relay while TTL remains and the frame is not ours.
@@ -238,10 +265,39 @@ class MeshController {
         seq: p.seq,
         initialTtl: p.initialTtl,
         hopCount: p.hopCount + 1,
-        reserved: p.reserved,
+        flags: p.flags,
       );
       framesRelayed++;
       adapter.broadcast(relay);
+    }
+  }
+
+  /// Periodic sweep: drop peers silent for >2min (stale people lingering),
+  /// and clear SOS beacons whose 90s re-broadcast lease has lapsed.
+  void _sweep() {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final ended = <MeshNodeState>[];
+    var changed = false;
+    _nodes.removeWhere((id, n) {
+      if (now - n.lastSeenEpoch > 120000) {
+        changed = true;
+        return true;
+      }
+      if (n.hasSos && n.sosExpiryEpoch > 0 && now > n.sosExpiryEpoch) {
+        n.clearSos();
+        ended.add(n);
+        changed = true;
+      }
+      return false;
+    });
+    if (ended.isNotEmpty) {
+      for (final n in ended) {
+        _sosEnded.add(n);
+      }
+    }
+    if (changed) {
+      _approxDirty = true;
+      _nodeUpdates.add(Map.of(_nodes));
     }
   }
 }

@@ -90,7 +90,7 @@ class MeshPacket {
     required this.seq,
     this.initialTtl = defaultInitialTtl,
     this.hopCount = 0,
-    this.reserved = 0,
+    this.flags = 0,
   });
 
   final MeshPacketType type;
@@ -101,7 +101,13 @@ class MeshPacket {
   final int seq;
   final int initialTtl;
   final int hopCount;
-  final int reserved;
+
+  /// Flags byte (index 17). Bit 0 = SOS-cleared marker so a deactivated SOS
+  /// propagates through the mesh instead of lingering until timeout.
+  final int flags;
+
+  /// True when this sosBeacon announces the sender's SOS is now off.
+  bool get sosCleared => (flags & 0x01) != 0;
 
   /// Remaining hops before the frame must be dropped.
   int get ttl => initialTtl - hopCount;
@@ -130,7 +136,7 @@ class MeshPacket {
     out[13] = ((initialTtl & 0x0f) << 4) | (hopCount & 0x0f);
     out.buffer.asByteData().setUint16(14, seq, Endian.big);
     out[16] = crc8(out.sublist(0, 16));
-    out[17] = reserved;
+    out[17] = flags;
     return out;
   }
 
@@ -155,7 +161,7 @@ class MeshPacket {
       initialTtl: (raw[13] >> 4) & 0x0f,
       hopCount: raw[13] & 0x0f,
       seq: bd.getUint16(14, Endian.big),
-      reserved: raw[17],
+      flags: raw[17],
     );
   }
 

@@ -21,6 +21,28 @@ class ModeShell extends StatefulWidget {
 
 class _ModeShellState extends State<ModeShell> {
   late int _index = 0;
+  AppState? _app;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _app ??= AppScope.of(context)..navRequest.addListener(_consumeNav);
+  }
+
+  @override
+  void dispose() {
+    _app?.navRequest.removeListener(_consumeNav);
+    super.dispose();
+  }
+
+  /// Notification taps and deep links switch tabs; consume after one use so a
+  /// stale request doesn't keep forcing the user back to HQ.
+  void _consumeNav() {
+    final target = _app!.navRequest.value;
+    if (target == null) return;
+    _app!.navRequest.value = null;
+    if (target != _index) setState(() => _index = target);
+  }
 
   @override
   Widget build(BuildContext context) {

@@ -13,9 +13,12 @@ import '../core/mesh/mesh_controller.dart';
 import 'hud_theme.dart';
 
 class MeshMap extends StatefulWidget {
-  const MeshMap({super.key, required this.mesh});
+  const MeshMap({super.key, required this.mesh, this.focus});
 
   final MeshController mesh;
+
+  /// Optional SOS target the camera flies to and holds (notification taps).
+  final LatLng? focus;
 
   @override
   State<MeshMap> createState() => _MeshMapState();
@@ -33,19 +36,33 @@ class _MeshMapState extends State<MeshMap> {
     super.initState();
     _ticker = Timer.periodic(const Duration(seconds: 3), (_) {
       if (!mounted) return;
-      final center = _center;
-      if (MeshController.kmBetween(
-            center.latitude,
-            center.longitude,
-            _lastCenter.latitude,
-            _lastCenter.longitude,
-          ) >
-          0.2) {
-        _lastCenter = center;
-        _mapController.move(center, 15);
-      }
+      _flyTo(_target);
       setState(() {});
     });
+  }
+
+  /// Focus target wins over the auto-center while it is set.
+  LatLng get _target => widget.focus ?? _center;
+
+  @override
+  void didUpdateWidget(covariant MeshMap oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.focus != oldWidget.focus && widget.focus != null) {
+      _flyTo(widget.focus!);
+    }
+  }
+
+  void _flyTo(LatLng center) {
+    if (MeshController.kmBetween(
+          center.latitude,
+          center.longitude,
+          _lastCenter.latitude,
+          _lastCenter.longitude,
+        ) >
+        0.2) {
+      _lastCenter = center;
+      _mapController.move(center, 15);
+    }
   }
 
   @override
@@ -55,8 +72,11 @@ class _MeshMapState extends State<MeshMap> {
     super.dispose();
   }
 
+  /// Where the camera should sit: own GPS fix first (phones), then the
+  /// peer-consensus estimate (laptops), then a neutral fallback.
   LatLng get _center {
     final m = widget.mesh;
+    if (m.gpsFix) return LatLng(m.gpsLatitude!, m.gpsLongitude!);
     return m.approxLatitude != null
         ? LatLng(m.approxLatitude!, m.approxLongitude!)
         : _fallbackCenter;
@@ -67,7 +87,9 @@ class _MeshMapState extends State<MeshMap> {
     final p = AppPalette.of(context);
     final m = widget.mesh;
     final nodes = m.nodes.values.toList();
+    final ownFix = m.gpsFix;
     final estimated = m.approxLatitude != null;
+    final located = ownFix || estimated;
     final center = _center;
     if (_lastCenter == const LatLng(0, 0)) _lastCenter = center;
 
@@ -129,16 +151,18 @@ class _MeshMapState extends State<MeshMap> {
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
             decoration: BoxDecoration(
-              border: Border.all(color: estimated ? p.secondary : p.error),
+              border: Border.all(color: located ? p.secondary : p.error),
               color: p.bg.withValues(alpha: 0.8),
             ),
             child: Text(
-              estimated
+              ownFix
+                  ? 'OWN GPS FIX'
+                  : estimated
                   ? 'ESTIMATED POSITION (${peopleCount(m.approxSourceCount)} · '
                         '≈${m.approxRadiusKm!.toStringAsFixed(1)} km)'
                   : 'NO GPS HW FOUND — LOOKING FOR PEOPLE',
               style: TextStyle(
-                color: estimated ? p.secondary : p.error,
+                color: located ? p.secondary : p.error,
                 fontFamily: 'monospace',
                 fontSize: 9,
                 letterSpacing: 1,

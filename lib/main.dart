@@ -7,6 +7,7 @@ import 'app_scope.dart';
 import 'core/app_state.dart';
 import 'core/mesh/native_mesh.dart';
 import 'core/mesh_packet.dart';
+import 'core/notifications.dart';
 import 'ui/hud_theme.dart';
 import 'ui/shell.dart';
 
@@ -18,6 +19,9 @@ Future<void> main() async {
 
   final state = AppState();
   await state.init();
+
+  final notifier = SosNotifier(state);
+  await notifier.init();
 
   runApp(AapadSetuApp(state: state));
 }

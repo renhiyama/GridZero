@@ -178,13 +178,9 @@ class NativeMeshAdapter implements MeshAdapter {
   Future<void> _startAdvertising() async {
     BlePeripheral.setAdvertisingStatusUpdateCallback(_onAdvertisingStatus);
     try {
-      final supported = await BlePeripheral.isSupported();
-      if (!supported) {
-        _advertising = false;
-        _advertisingError = 'hardware unsupported';
-        debugPrint('AapadSetu: BLE advertising unsupported on this device');
-        return;
-      }
+      // initialize() must run first: isSupported() reads the BluetoothManager
+      // the plugin only sets up during initialize(), so checking it before
+      // would always report "unsupported".
       await BlePeripheral.initialize();
       await BlePeripheral.startAdvertising(
         services: const [],

@@ -447,6 +447,12 @@ class _MeshStatus extends StatelessWidget {
           '${nodes.where((n) => n.hasSos).length} ACTIVE',
           color: nodes.where((n) => n.hasSos).isNotEmpty ? p.error : p.primary,
         ),
+        const SizedBox(height: 6),
+        HduReadout(
+          'RADIO',
+          '${app.mesh.adapter.name} :: ${app.mesh.adapter.status}',
+          color: p.textDim,
+        ),
       ],
     );
   }

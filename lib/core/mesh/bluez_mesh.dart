@@ -9,6 +9,12 @@ import 'mesh_adapter.dart';
 
 const int kMeshCompanyId = 0xffff;
 
+/// How long each scan window runs before the radio goes idle (adv-only).
+const Duration _scanWindowDuration = Duration(milliseconds: 2200);
+
+/// Idle period between scan windows (advertisement transmits during this).
+const Duration _sleepWindowDuration = Duration(seconds: 4);
+
 /// Linux desktop transport: real BLE through BlueZ on the system D-Bus.
 ///
 /// Scanning watches Device1.ManufacturerData on every discovered device;
@@ -27,7 +33,8 @@ class BluezMeshAdapter implements MeshAdapter {
   StreamSubscription? _adapterAddedSub;
   final Map<String, StreamSubscription<List<String>>> _devicePropSubs = {};
   BlueZAdvertisement? _advert;
-  bool _scanning = false;
+  Timer? _dutyCycleTimer;
+  bool _scanOn = false;
   bool _advertising = false;
   String? _error;
   final _seenPeers = <int>{};
@@ -44,7 +51,7 @@ class BluezMeshAdapter implements MeshAdapter {
       return 'bluez unavailable${_error != null ? ' ($_error)' : ''}';
     }
     return [
-      _scanning ? 'SCANNING' : 'IDLE',
+      _scanOn ? 'SCANNING' : 'SCAN IDLE',
       _advertising ? 'ADV' : 'ADV OFF',
       if (_seenPeers.isNotEmpty) '${_seenPeers.length} peer(s)',
     ].join(' · ');
@@ -80,13 +87,37 @@ class BluezMeshAdapter implements MeshAdapter {
       if (!adapter.powered) {
         await adapter.setPowered(true);
       }
-      await adapter.startDiscovery();
-      _scanning = true;
+    } catch (e) {
+      _error = 'power: $e';
+      debugPrint('AapadSetu: bluez power-on failed: $e');
+    }
+    // Duty cycle: a single radio cannot transmit its own advertisement while
+    // scanning full-time on controllers without concurrent adv+scan support.
+    // Scan for a window, then go idle so the advertisement actually gets out.
+    _scanWindow();
+    await _startAdvertising();
+  }
+
+  Future<void> _scanWindow() async {
+    _dutyCycleTimer?.cancel();
+    _scanOn = true;
+    try {
+      await _adapter!.startDiscovery();
     } catch (e) {
       _error = 'discovery: $e';
       debugPrint('AapadSetu: bluez discovery failed: $e');
     }
-    await _startAdvertising();
+    _dutyCycleTimer = Timer(_scanWindowDuration, _sleepWindow);
+  }
+
+  Future<void> _sleepWindow() async {
+    _scanOn = false;
+    try {
+      await _adapter!.stopDiscovery();
+    } catch (_) {
+      // Discovery may already be stopped.
+    }
+    _dutyCycleTimer = Timer(_sleepWindowDuration, _scanWindow);
   }
 
   void _handleDevice(BlueZDevice device) {
@@ -157,6 +188,8 @@ class BluezMeshAdapter implements MeshAdapter {
 
   @override
   Future<void> stop() async {
+    _dutyCycleTimer?.cancel();
+    _dutyCycleTimer = null;
     await _deviceAddedSub?.cancel();
     _deviceAddedSub = null;
     await _adapterAddedSub?.cancel();
@@ -166,7 +199,7 @@ class BluezMeshAdapter implements MeshAdapter {
     }
     _devicePropSubs.clear();
     try {
-      if (_adapter != null && _scanning) {
+      if (_adapter != null) {
         await _adapter!.stopDiscovery();
       }
     } catch (_) {
@@ -181,7 +214,7 @@ class BluezMeshAdapter implements MeshAdapter {
     }
     _advert = null;
     _advertising = false;
-    _scanning = false;
+    _scanOn = false;
     await _client?.close();
     _client = null;
     await _rx.close();

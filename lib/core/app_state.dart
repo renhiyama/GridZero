@@ -15,10 +15,9 @@ import 'package:geolocator/geolocator.dart';
 import 'ledger/ledger_store.dart';
 import 'ledger/open.dart';
 import 'master_key.dart';
+import 'mesh/bluez_mesh.dart';
 import 'mesh/mesh_adapter.dart';
 import 'mesh/mesh_controller.dart';
-import 'mesh/simulated_mesh.dart';
-import 'mesh/simulator.dart';
 import 'mesh_packet.dart';
 import 'totp.dart';
 
@@ -38,12 +37,6 @@ class AppState extends ChangeNotifier {
 
   late LedgerStore ledger;
   late MeshController mesh;
-  // BLE mesh is a phone thing; desktop/web default to the local simulator
-  // (scanning may still work via bluez, but advertising generally does not).
-  bool _useSimulator =
-      !(defaultTargetPlatform == TargetPlatform.android ||
-          defaultTargetPlatform == TargetPlatform.iOS);
-  bool get useSimulator => _useSimulator;
 
   bool sosActive = false;
   TriageFlags sosFlags = TriageFlags(severity: 3);
@@ -85,29 +78,14 @@ class AppState extends ChangeNotifier {
     _heartbeat = Timer.periodic(const Duration(seconds: 10), (_) {
       mesh.announce();
     });
-    _startVirtualNetworkIfDesktop();
     initialized = true;
     notifyListeners();
     await _acquireGps();
   }
 
-  /// Desktop has no BLE radio, so it runs a small virtual network so the
-  /// maps / links actually show live traffic. Phones use real BLE only.
-  MeshSimulator? _virtualNetwork;
-  bool get virtualNetworkActive => _virtualNetwork != null;
-
-  void _startVirtualNetworkIfDesktop() {
-    if (defaultTargetPlatform == TargetPlatform.android ||
-        defaultTargetPlatform == TargetPlatform.iOS) {
-      return;
-    }
-    _virtualNetwork = MeshSimulator(mesh.adapter, nodeCount: 10)..start();
-  }
-
-  /// Real GPS lives on phones; laptops/web have none. Failure is normal —
+  /// Real GPS lives on phones; laptops have none. Failure is normal —
   /// the app then falls back to the peer-consensus estimate.
   Future<void> _acquireGps() async {
-    if (kIsWeb) return;
     if (defaultTargetPlatform != TargetPlatform.android &&
         defaultTargetPlatform != TargetPlatform.iOS) {
       return;
@@ -142,9 +120,12 @@ class AppState extends ChangeNotifier {
         (sha256.convert(utf8.encode(citizenId)).bytes[0] << 8 |
             sha256.convert(utf8.encode(citizenId)).bytes[1]) &
         0xffff;
-    final adapter = _useSimulator
-        ? SimulatedMeshAdapter() as MeshAdapter
-        : _nativeAdapter(nodeId);
+    final adapter = switch (defaultTargetPlatform) {
+      TargetPlatform.linux => BluezMeshAdapter(
+        advertisingPayload: Uint8List(meshPacketLength),
+      ) as MeshAdapter,
+      _ => _nativeAdapter(nodeId),
+    };
     return MeshController(nodeId: nodeId, adapter: adapter);
   }
 
@@ -154,15 +135,6 @@ class AppState extends ChangeNotifier {
   };
 
   MeshAdapter _nativeAdapter(int nodeId) => nativeAdapterFactory(nodeId);
-
-  Future<void> setUseSimulator(bool value) async {
-    if (value == _useSimulator) return;
-    _useSimulator = value;
-    await mesh.stop();
-    mesh = _buildMesh();
-    await mesh.start();
-    notifyListeners();
-  }
 
   /// Current TOTP token for this device's citizen QR.
   String currentToken() => totpToken(
@@ -301,7 +273,6 @@ class AppState extends ChangeNotifier {
 
   @override
   void dispose() {
-    _virtualNetwork?.stop();
     _heartbeat?.cancel();
     _sosTimer?.cancel();
     mesh.stop();

@@ -53,6 +53,9 @@ class AppPalette {
 /// Default seed used before any user selection (legacy AapadSetu green).
 const Color kDefaultSeed = Color(0xFF00FF9C);
 
+/// Natural-English people count: '1 person', '2 people'.
+String peopleCount(int count) => '$count ${count == 1 ? 'person' : 'people'}';
+
 abstract final class HudTheme {
   static ThemeData dark = build(
     seed: kDefaultSeed,

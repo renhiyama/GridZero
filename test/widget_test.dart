@@ -1,17 +1,16 @@
 import 'package:aapadsetu/app_scope.dart';
 import 'package:aapadsetu/core/app_state.dart';
 import 'package:aapadsetu/core/master_key.dart';
-import 'package:aapadsetu/core/mesh/mesh_adapter.dart';
-import 'package:aapadsetu/core/mesh/simulated_mesh.dart';
 import 'package:aapadsetu/ui/hud_theme.dart';
 import 'package:aapadsetu/ui/shell.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
+import 'fake_mesh_adapter.dart';
+
 AppState makeState() {
-  AppState.nativeAdapterFactory = (nodeId) =>
-      SimulatedMeshAdapter() as MeshAdapter;
+  AppState.nativeAdapterFactory = (nodeId) => FakeMeshAdapter();
   return AppState();
 }
 

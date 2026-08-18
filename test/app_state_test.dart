@@ -3,13 +3,12 @@ import 'dart:convert';
 import 'package:aapadsetu/core/app_state.dart';
 import 'package:aapadsetu/core/ledger/ledger_store.dart';
 import 'package:aapadsetu/core/master_key.dart';
-import 'package:aapadsetu/core/mesh/mesh_adapter.dart';
-import 'package:aapadsetu/core/mesh/simulated_mesh.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'fake_mesh_adapter.dart';
+
 AppState makeState() {
-  AppState.nativeAdapterFactory = (nodeId) =>
-      SimulatedMeshAdapter() as MeshAdapter;
+  AppState.nativeAdapterFactory = (nodeId) => FakeMeshAdapter();
   return AppState();
 }
 
@@ -70,14 +69,11 @@ void main() {
     officer.dispose();
   });
 
-  test('switch role and simulator toggle survive', () async {
+  test('switch role survives', () async {
     final app = makeState();
     await app.init();
     app.switchRole(Role.citizen);
     expect(app.role, Role.citizen);
-
-    await app.setUseSimulator(true);
-    expect(app.useSimulator, isTrue);
     app.dispose();
   });
 }

@@ -25,9 +25,8 @@ class OfficerScreen extends StatefulWidget {
 
 class _OfficerScreenState extends State<OfficerScreen> {
   ClaimResult? _lastClaim;
-  // mobile_scanner covers Android/iOS/macOS/web; Linux uses the V4L2 path.
+  // mobile_scanner covers Android/iOS/macOS; Linux uses the V4L2 path.
   final bool _cameraUsable =
-      kIsWeb ||
       defaultTargetPlatform == TargetPlatform.android ||
       defaultTargetPlatform == TargetPlatform.iOS ||
       defaultTargetPlatform == TargetPlatform.macOS ||
@@ -218,9 +217,8 @@ class _QrScanPageState extends State<_QrScanPage> {
   }
 
   Future<void> _requestCamera() async {
-    // Web has no permission_handler; the browser asks on its own when the
-    // scanner starts. Linux uses the V4L2 page (no permission prompt).
-    if (kIsWeb || defaultTargetPlatform == TargetPlatform.linux) {
+    // Linux uses the V4L2 page (no permission prompt).
+    if (defaultTargetPlatform == TargetPlatform.linux) {
       if (mounted) setState(() => _cameraGranted = true);
       return;
     }

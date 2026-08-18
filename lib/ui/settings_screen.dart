@@ -44,7 +44,7 @@ class _LocationRows extends StatelessWidget {
               HduReadout(
                 'LAT (APPROX)',
                 '${mesh.approxLatitude!.toStringAsFixed(5)} '
-                    '· ${mesh.approxSourceCount} person(s)',
+                    '· ${peopleCount(mesh.approxSourceCount)}',
               ),
               const SizedBox(height: 2),
               HduReadout(

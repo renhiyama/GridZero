@@ -1,5 +1,5 @@
 name: aapadsetu
-description: "AapadSetu (आपदसेतु) — air-gapped disaster relief & P2P triage: BLE mesh, dynamic TOTP ration QR, hash-chain ledger, web Command HQ."
+description: "AapadSetu (आपदसेतु) — air-gapped disaster relief & P2P triage: BLE mesh, dynamic TOTP ration QR, hash-chain ledger, Command HQ."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
@@ -51,6 +51,8 @@ dependencies:
   geolocator: ^14.0.3
   flutter_lite_camera: ^0.1.0
   zxing2: ^0.2.4
+  bluez: ^0.8.3
+  dbus: ^0.7.14
 
 dev_dependencies:
   flutter_test:

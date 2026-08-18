@@ -13,10 +13,10 @@ import 'package:flutter/foundation.dart';
 
 import '../mesh_packet.dart';
 import '../nonce_dedup.dart';
+import 'bluez_mesh.dart';
 import 'mesh_adapter.dart';
 import 'mesh_node.dart';
 import 'native_mesh.dart';
-import 'simulated_mesh.dart';
 
 class MeshController {
   MeshController({required this.nodeId, MeshAdapter? adapter})
@@ -140,8 +140,12 @@ class MeshController {
   int framesRelayed = 0;
 
   static MeshAdapter _pickAdapter() {
-    if (kIsWeb) return SimulatedMeshAdapter();
-    return NativeMeshAdapter(advertisingPayload: Uint8List(meshPacketLength));
+    return switch (defaultTargetPlatform) {
+      TargetPlatform.linux => BluezMeshAdapter(
+        advertisingPayload: Uint8List(meshPacketLength),
+      ) as MeshAdapter,
+      _ => NativeMeshAdapter(advertisingPayload: Uint8List(meshPacketLength)),
+    };
   }
 
   Future<void> start() => adapter.start();

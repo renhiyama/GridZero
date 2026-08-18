@@ -134,8 +134,7 @@ class _MeshMapState extends State<MeshMap> {
             ),
             child: Text(
               estimated
-                  ? 'ESTIMATED POSITION (${m.approxSourceCount} '
-                        'person${m.approxSourceCount == 1 ? '' : 's'} · '
+                  ? 'ESTIMATED POSITION (${peopleCount(m.approxSourceCount)} · '
                         '≈${m.approxRadiusKm!.toStringAsFixed(1)} km)'
                   : 'NO GPS HW FOUND — LOOKING FOR PEOPLE',
               style: TextStyle(

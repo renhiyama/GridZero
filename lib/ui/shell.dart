@@ -1,8 +1,7 @@
-/// Mode shell: Citizen (default), Officer (enlisted), Command HQ (web) and
+/// Mode shell: Citizen (default), Officer (enlisted), Command HQ and
 /// Settings.
 library;
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../app_scope.dart';
@@ -21,7 +20,7 @@ class ModeShell extends StatefulWidget {
 }
 
 class _ModeShellState extends State<ModeShell> {
-  late int _index = kIsWeb ? 2 : 0;
+  late int _index = 0;
 
   @override
   Widget build(BuildContext context) {

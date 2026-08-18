@@ -8,10 +8,6 @@
 /// callback, NOT by the startAdvertising future (the plugin posts to its own
 /// thread). This adapter subscribes to that callback so a silent adv failure
 /// is surfaced in the HUD instead of masquerading as healthy.
-///
-/// Linux and web lack peripheral advertising support, so on those platforms
-/// the adapter silently degrades to scan-only operation and the app falls
-/// back to the simulator for the transmit half.
 library;
 
 import 'dart:async';
@@ -57,7 +53,6 @@ class NativeMeshAdapter implements MeshAdapter {
 
   @override
   String get status {
-    if (kIsWeb) return _permStatus;
     final parts = <String>[_permStatus, _scanning ? 'SCANNING' : 'SCAN IDLE'];
     parts.add(
       _advertising
@@ -72,17 +67,10 @@ class NativeMeshAdapter implements MeshAdapter {
   }
 
   @override
-  bool get isSimulated => false;
-
-  @override
   Stream<MeshRxPacket> get onPacket => _rx.stream;
 
   @override
   Future<String> ensurePermissions() async {
-    if (kIsWeb) {
-      _permStatus = 'n/a (web)';
-      return _permStatus;
-    }
     try {
       if (defaultTargetPlatform == TargetPlatform.android) {
         final scan = await Permission.bluetoothScan.request();
@@ -188,7 +176,6 @@ class NativeMeshAdapter implements MeshAdapter {
   }
 
   Future<void> _startAdvertising() async {
-    if (kIsWeb) return;
     BlePeripheral.setAdvertisingStatusUpdateCallback(_onAdvertisingStatus);
     try {
       final supported = await BlePeripheral.isSupported();
@@ -224,7 +211,7 @@ class NativeMeshAdapter implements MeshAdapter {
     advertisingPayload = payload;
     // Android cannot mutate manufacturer data in place: stop/start is the only
     // way to push a new frame, so skip the churn when nothing changed.
-    if (kIsWeb || !_advertising || !changed) return;
+    if (!_advertising || !changed) return;
     try {
       await BlePeripheral.stopAdvertising();
       await BlePeripheral.startAdvertising(
@@ -243,7 +230,7 @@ class NativeMeshAdapter implements MeshAdapter {
 
   @override
   Future<void> injectRemote(MeshPacket packet) async {
-    throw UnsupportedError('injectRemote is only for simulated transport');
+    throw UnsupportedError('injectRemote is for test harnesses only');
   }
 
   @override

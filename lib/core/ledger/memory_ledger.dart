@@ -1,4 +1,4 @@
-/// In-memory ledger backend for web builds and tests. Enforces the same
+/// In-memory ledger backend for tests. Enforces the same
 /// daily-duplicate and hash-chain rules as the SQLite backend.
 library;
 

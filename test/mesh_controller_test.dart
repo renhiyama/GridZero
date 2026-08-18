@@ -1,7 +1,8 @@
 import 'package:aapadsetu/core/mesh/mesh_controller.dart';
-import 'package:aapadsetu/core/mesh/simulated_mesh.dart';
 import 'package:aapadsetu/core/mesh_packet.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import 'fake_mesh_adapter.dart';
 
 MeshPacket foreignPacket({int seq = 1, int ttl = 3, int hop = 0}) => MeshPacket(
   type: MeshPacketType.sosBeacon,
@@ -16,7 +17,7 @@ MeshPacket foreignPacket({int seq = 1, int ttl = 3, int hop = 0}) => MeshPacket(
 
 void main() {
   test('own broadcast registers own node state', () async {
-    final adapter = SimulatedMeshAdapter();
+    final adapter = FakeMeshAdapter();
     final ctrl = MeshController(nodeId: 0x1111, adapter: adapter);
     await ctrl.start();
     await ctrl.broadcastSos(triage: TriageFlags(severity: 2));
@@ -28,7 +29,7 @@ void main() {
   });
 
   test('duplicate frames are deduplicated (FR-1.4)', () async {
-    final adapter = SimulatedMeshAdapter();
+    final adapter = FakeMeshAdapter();
     final ctrl = MeshController(nodeId: 0x1111, adapter: adapter);
     final sosEvents = <MeshPacket>[];
     ctrl.sosStream.listen(sosEvents.add);
@@ -48,7 +49,7 @@ void main() {
   test(
     'foreign packet with TTL is relayed with incremented hop (FR-1.3)',
     () async {
-      final adapter = SimulatedMeshAdapter();
+      final adapter = FakeMeshAdapter();
       final ctrl = MeshController(nodeId: 0x1111, adapter: adapter);
       await ctrl.start();
 
@@ -63,7 +64,7 @@ void main() {
   );
 
   test('packet at hop == initial TTL is dropped (FR-1.3)', () async {
-    final adapter = SimulatedMeshAdapter();
+    final adapter = FakeMeshAdapter();
     final ctrl = MeshController(nodeId: 0x1111, adapter: adapter);
     await ctrl.start();
 
@@ -76,7 +77,7 @@ void main() {
   });
 
   test('own packet is never re-relayed', () async {
-    final adapter = SimulatedMeshAdapter();
+    final adapter = FakeMeshAdapter();
     final ctrl = MeshController(nodeId: 0x1111, adapter: adapter);
     await ctrl.start();
 
@@ -89,7 +90,7 @@ void main() {
   });
 
   test('no GPS hardware -> announce broadcasts 0,0 no-fix sentinel', () async {
-    final adapter = SimulatedMeshAdapter();
+    final adapter = FakeMeshAdapter();
     final ctrl = MeshController(nodeId: 0x1111, adapter: adapter);
     await ctrl.start();
     await ctrl.announce();
@@ -104,7 +105,7 @@ void main() {
   });
 
   test('approx position is a consensus median of GPS peers', () async {
-    final adapter = SimulatedMeshAdapter();
+    final adapter = FakeMeshAdapter();
     final ctrl = MeshController(nodeId: 0x1111, adapter: adapter);
     await ctrl.start();
 
@@ -150,7 +151,7 @@ void main() {
   });
 
   test('gpsFix sets own coordinates and advertises them', () async {
-    final adapter = SimulatedMeshAdapter();
+    final adapter = FakeMeshAdapter();
     final ctrl = MeshController(nodeId: 0x1111, adapter: adapter);
     ctrl.setGpsFix(latitude: 19.1, longitude: 72.9);
     await ctrl.start();

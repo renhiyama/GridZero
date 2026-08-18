@@ -73,9 +73,7 @@ class _HqScreenState extends State<HqScreen> {
                     color: p.primary.withValues(alpha: 0.12),
                   ),
                   child: Text(
-                    app.virtualNetworkActive
-                        ? 'VIRTUAL TEST NETWORK'
-                        : 'LIVE MESH',
+                    'LIVE MESH',
                     style: TextStyle(
                       color: p.primary,
                       fontFamily: 'monospace',

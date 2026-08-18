@@ -373,8 +373,7 @@ class _LocationPanel extends StatelessWidget {
           ),
           const SizedBox(height: 4),
           Text(
-            'Estimate from ${mesh.approxSourceCount} nearby '
-            'person${mesh.approxSourceCount == 1 ? '' : 's'} '
+            'Estimate from ${peopleCount(mesh.approxSourceCount)} nearby '
             '(no GPS hardware). Radius ≈ ${mesh.approxRadiusKm!.toStringAsFixed(1)} km.',
             style: TextStyle(
               color: p.textDim,

@@ -1,5 +1,6 @@
-/// Mesh transport abstraction. Native adapters ride on real BLE; the
-/// simulated adapter powers desktop/web demos without radio hardware.
+/// Mesh transport abstraction. Native adapters ride on real BLE: phones use
+/// flutter_blue_plus + ble_peripheral_plus, Linux desktops use BlueZ via
+/// system D-Bus. There is no simulated transport.
 library;
 
 import '../mesh_packet.dart';
@@ -18,9 +19,6 @@ abstract class MeshAdapter {
   /// One-line runtime health / permission status for the HUD.
   String get status;
 
-  /// True when packets are generated locally (no radio involved).
-  bool get isSimulated;
-
   Stream<MeshRxPacket> get onPacket;
 
   Future<void> start();
@@ -32,7 +30,7 @@ abstract class MeshAdapter {
   /// Requests runtime OS permissions needed by this transport.
   Future<String> ensurePermissions() async => status;
 
-  /// Injects a packet from a remote node (simulator / desktop demo only).
+  /// Injects a packet from a remote node (test harnesses only).
   Future<void> injectRemote(MeshPacket packet) async {
     throw UnsupportedError('injectRemote not supported on this adapter');
   }

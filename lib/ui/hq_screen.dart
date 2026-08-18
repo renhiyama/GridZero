@@ -325,6 +325,8 @@ class _HeatmapPainter extends CustomPainter {
         final cy = cell.center.dy;
         double heat = 0;
         for (final n in nodes) {
+          // Skip peers without a fix (0,0 sentinel) so they add no heat.
+          if (n.latitude.abs() < 1e-6 && n.longitude.abs() < 1e-6) continue;
           final nx = (n.longitude - 72.75) / 0.3 * size.width;
           final ny = (19.20 - n.latitude) / 0.35 * size.height;
           final d = (Offset(nx, ny) - Offset(cx, cy)).distance;

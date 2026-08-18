@@ -43,6 +43,10 @@ void main() {
     expect(find.textContaining('DYNAMIC RATION QR'), findsOneWidget);
     expect(find.textContaining('CITIZEN ▸'), findsOneWidget);
     expect(find.byType(QrImageView), findsOneWidget);
+    await tester.drag(find.byType(ListView).first, const Offset(0, -500));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('NO GPS FIX', findRichText: true),
+        findsWidgets);
 
     await teardown(tester, state);
   });

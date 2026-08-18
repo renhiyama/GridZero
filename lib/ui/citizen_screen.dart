@@ -346,15 +346,53 @@ class _LocationPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = AppPalette.of(context);
+    final mesh = app.mesh;
+    if (mesh.gpsFix) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          HduReadout('LAT', '${mesh.gpsLatitude!.toStringAsFixed(5)}° N'),
+          const SizedBox(height: 4),
+          HduReadout('LONG', '${mesh.gpsLongitude!.toStringAsFixed(5)}° E'),
+        ],
+      );
+    }
+    final est = mesh.approxLatitude != null;
+    if (est) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          HduReadout(
+            'LAT (APPROX)',
+            '${mesh.approxLatitude!.toStringAsFixed(5)}° N',
+          ),
+          const SizedBox(height: 4),
+          HduReadout(
+            'LONG (APPROX)',
+            '${mesh.approxLongitude!.toStringAsFixed(5)}° E',
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Estimate from ${mesh.approxSourceCount} mesh '
+            'device${mesh.approxSourceCount == 1 ? '' : 's'} '
+            '(no GPS hardware). Radius ≈ ${mesh.approxRadiusKm!.toStringAsFixed(1)} km.',
+            style: TextStyle(
+              color: p.textDim,
+              fontFamily: 'monospace',
+              fontSize: 9,
+            ),
+          ),
+        ],
+      );
+    }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        HduReadout('LAT', '${app.mesh.latitude.toStringAsFixed(5)}° N'),
-        const SizedBox(height: 4),
-        HduReadout('LONG', '${app.mesh.longitude.toStringAsFixed(5)}° E'),
+        HduReadout('POSITION', 'NO GPS FIX'),
         const SizedBox(height: 4),
         Text(
-          'Coordinates transmit with every SOS beacon.',
+          'No GPS on this device. Position will be estimated from '
+          'nearby mesh devices once they are heard.',
           style: TextStyle(
             color: p.textDim,
             fontFamily: 'monospace',

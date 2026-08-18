@@ -95,12 +95,7 @@ class AppState extends ChangeNotifier {
     final adapter = _useSimulator
         ? SimulatedMeshAdapter() as MeshAdapter
         : _nativeAdapter(nodeId);
-    return MeshController(
-      nodeId: nodeId,
-      startLatitude: 19.0760,
-      startLongitude: 72.8777,
-      adapter: adapter,
-    );
+    return MeshController(nodeId: nodeId, adapter: adapter);
   }
 
   // Late binding so the platform MeshAdapter can be swapped out in tests.
@@ -220,8 +215,8 @@ class AppState extends ChangeNotifier {
   MeshPacket _buildLedgerPacket() => MeshPacket(
     type: MeshPacketType.ledgerSyncRequest,
     senderId: mesh.nodeId,
-    latitude: mesh.startLatitude,
-    longitude: mesh.startLongitude,
+    latitude: mesh.gpsFix ? mesh.gpsLatitude! : 0,
+    longitude: mesh.gpsFix ? mesh.gpsLongitude! : 0,
     triage: TriageFlags(),
     seq: _claimSeq & 0xffff,
   );

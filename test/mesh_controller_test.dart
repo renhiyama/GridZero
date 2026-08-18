@@ -19,8 +19,6 @@ void main() {
     final adapter = SimulatedMeshAdapter();
     final ctrl = MeshController(
       nodeId: 0x1111,
-      startLatitude: 19.0,
-      startLongitude: 72.8,
       adapter: adapter,
     );
     await ctrl.start();
@@ -36,8 +34,6 @@ void main() {
     final adapter = SimulatedMeshAdapter();
     final ctrl = MeshController(
       nodeId: 0x1111,
-      startLatitude: 19.0,
-      startLongitude: 72.8,
       adapter: adapter,
     );
     final sosEvents = <MeshPacket>[];
@@ -60,8 +56,6 @@ void main() {
     final adapter = SimulatedMeshAdapter();
     final ctrl = MeshController(
       nodeId: 0x1111,
-      startLatitude: 19.0,
-      startLongitude: 72.8,
       adapter: adapter,
     );
     await ctrl.start();
@@ -79,8 +73,6 @@ void main() {
     final adapter = SimulatedMeshAdapter();
     final ctrl = MeshController(
       nodeId: 0x1111,
-      startLatitude: 19.0,
-      startLongitude: 72.8,
       adapter: adapter,
     );
     await ctrl.start();
@@ -97,8 +89,6 @@ void main() {
     final adapter = SimulatedMeshAdapter();
     final ctrl = MeshController(
       nodeId: 0x1111,
-      startLatitude: 19.0,
-      startLongitude: 72.8,
       adapter: adapter,
     );
     await ctrl.start();
@@ -108,6 +98,80 @@ void main() {
     await Future<void>.delayed(const Duration(milliseconds: 20));
 
     expect(ctrl.framesRelayed - relaysBefore, 0);
+    await ctrl.stop();
+  });
+
+  test('no GPS hardware -> announce broadcasts 0,0 no-fix sentinel', () async {
+    final adapter = SimulatedMeshAdapter();
+    final ctrl = MeshController(nodeId: 0x1111, adapter: adapter);
+    await ctrl.start();
+    await ctrl.announce();
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+
+    final own = ctrl.nodes[0x1111]!;
+    expect(own.latitude, 0);
+    expect(own.longitude, 0);
+    expect(ctrl.gpsFix, isFalse);
+    expect(ctrl.approxLatitude, isNull);
+    await ctrl.stop();
+  });
+
+  test('approx position is a consensus median of GPS peers', () async {
+    final adapter = SimulatedMeshAdapter();
+    final ctrl = MeshController(nodeId: 0x1111, adapter: adapter);
+    await ctrl.start();
+
+    // Cluster around 19.07/72.87 with one far-away spoofed node.
+    final cluster = [
+      (19.0700, 72.8700),
+      (19.0710, 72.8720),
+      (19.0690, 72.8680),
+      (19.0720, 72.8740),
+      (19.0680, 72.8660),
+    ];
+    for (var i = 0; i < cluster.length; i++) {
+      final (lat, lon) = cluster[i];
+      await adapter.injectRemote(
+        MeshPacket(
+          type: MeshPacketType.relayStatus,
+          senderId: 0x2000 + i,
+          latitude: lat,
+          longitude: lon,
+          triage: TriageFlags(),
+          seq: i,
+        ),
+      );
+    }
+    // Malicious outlier ~11km south.
+    await adapter.injectRemote(
+      MeshPacket(
+        type: MeshPacketType.relayStatus,
+        senderId: 0x3000,
+        latitude: 18.97,
+        longitude: 72.87,
+        triage: TriageFlags(),
+        seq: 99,
+      ),
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+
+    expect(ctrl.approxSourceCount, greaterThanOrEqualTo(5));
+    expect(ctrl.approxLatitude, closeTo(19.07, 0.005));
+    expect(ctrl.approxLongitude, closeTo(72.87, 0.005));
+    expect(ctrl.approxRadiusKm, lessThan(2));
+    await ctrl.stop();
+  });
+
+  test('gpsFix sets own coordinates and advertises them', () async {
+    final adapter = SimulatedMeshAdapter();
+    final ctrl = MeshController(nodeId: 0x1111, adapter: adapter);
+    ctrl.setGpsFix(latitude: 19.1, longitude: 72.9);
+    await ctrl.start();
+    await ctrl.announce();
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+
+    expect(ctrl.nodes[0x1111]!.latitude, closeTo(19.1, 1e-6));
+    expect(ctrl.nodes[0x1111]!.longitude, closeTo(72.9, 1e-6));
     await ctrl.stop();
   });
 }

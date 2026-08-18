@@ -15,6 +15,8 @@ import '../app_scope.dart';
 import '../core/app_state.dart';
 import '../core/ledger/ledger_store.dart';
 import '../core/master_key.dart';
+import '../core/mesh/mesh_controller.dart';
+import '../core/mesh/mesh_node.dart';
 import 'hud_theme.dart';
 
 class OfficerScreen extends StatefulWidget {
@@ -490,23 +492,72 @@ class _LedgerTab extends StatelessWidget {
   }
 }
 
-class _MapTab extends StatelessWidget {
+class _MapTab extends StatefulWidget {
   const _MapTab({required this.app});
 
   final dynamic app;
 
   @override
+  State<_MapTab> createState() => _MapTabState();
+}
+
+class _MapTabState extends State<_MapTab> {
+  final _mapController = MapController();
+  Timer? _ticker;
+  LatLng _lastCenter = const LatLng(0, 0);
+
+  static const _fallbackCenter = LatLng(20.5937, 78.9629);
+
+  @override
+  void initState() {
+    super.initState();
+    // Re-pan when the mesh estimate moves while the tab stays open.
+    _ticker = Timer.periodic(const Duration(seconds: 3), (_) {
+      if (!mounted) return;
+      final mesh = widget.app.mesh;
+      final center = mesh.approxLatitude != null
+          ? LatLng(mesh.approxLatitude!, mesh.approxLongitude!)
+          : _fallbackCenter;
+      if (MeshController.kmBetween(
+            center.latitude,
+            center.longitude,
+            _lastCenter.latitude,
+            _lastCenter.longitude,
+          ) >
+          0.2) {
+        _lastCenter = center;
+        _mapController.move(center, 15);
+      }
+      setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _ticker?.cancel();
+    _mapController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final p = AppPalette.of(context);
-    final nodes = app.mesh.nodes.values.toList();
-    final center = LatLng(app.mesh.latitude, app.mesh.longitude);
+    final mesh = widget.app.mesh;
+    final nodes = (mesh.nodes.values as Iterable<MeshNodeState>).toList();
+    final estimated = mesh.approxLatitude != null;
+    final center = estimated
+        ? LatLng(mesh.approxLatitude!, mesh.approxLongitude!)
+        : _fallbackCenter;
+    if (_lastCenter == const LatLng(0, 0)) _lastCenter = center;
+
     return Stack(
       children: [
         Positioned.fill(
           child: FlutterMap(
+            mapController: _mapController,
             options: MapOptions(
               initialCenter: center,
-              initialZoom: 16,
+              initialZoom: 15,
               interactionOptions: const InteractionOptions(
                 flags: InteractiveFlag.all & ~InteractiveFlag.rotate,
               ),
@@ -523,20 +574,21 @@ class _MapTab extends StatelessWidget {
               MarkerLayer(
                 markers: [
                   for (final n in nodes)
-                    Marker(
-                      point: LatLng(n.latitude, n.longitude),
-                      width: 14,
-                      height: 14,
-                      child: _MapDot(
-                        color: n.nodeId == app.mesh.nodeId
-                            ? p.primary
-                            : n.hasSos
-                            ? p.error
-                            : p.secondary,
-                        self: n.nodeId == app.mesh.nodeId,
-                        sos: n.hasSos,
+                    if (MeshController.validCoord(n.latitude, n.longitude))
+                      Marker(
+                        point: LatLng(n.latitude, n.longitude),
+                        width: 14,
+                        height: 14,
+                        child: _MapDot(
+                          color: n.nodeId == mesh.nodeId
+                              ? p.primary
+                              : n.hasSos
+                              ? p.error
+                              : p.secondary,
+                          self: n.nodeId == mesh.nodeId,
+                          sos: n.hasSos,
+                        ),
                       ),
-                    ),
                 ],
               ),
               const RichAttributionWidget(
@@ -549,6 +601,30 @@ class _MapTab extends StatelessWidget {
           left: 8,
           bottom: 8,
           child: HduReadout('NODES', '${nodes.length}', color: p.secondary),
+        ),
+        Positioned(
+          left: 8,
+          top: 8,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+            decoration: BoxDecoration(
+              border: Border.all(color: estimated ? p.secondary : p.error),
+              color: p.bg.withValues(alpha: 0.8),
+            ),
+            child: Text(
+              estimated
+                  ? 'ESTIMATED POSITION (${mesh.approxSourceCount} '
+                        'device${mesh.approxSourceCount == 1 ? '' : 's'} · '
+                        '≈${mesh.approxRadiusKm!.toStringAsFixed(1)} km)'
+                  : 'NO GPS FIX — awaiting mesh devices',
+              style: TextStyle(
+                color: estimated ? p.secondary : p.error,
+                fontFamily: 'monospace',
+                fontSize: 9,
+                letterSpacing: 1,
+              ),
+            ),
+          ),
         ),
       ],
     );

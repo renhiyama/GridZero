@@ -17,6 +17,50 @@ const _seedSwatches = <(String, Color)>[
   ('BLUE', Color(0xFF448AFF)),
 ];
 
+class _LocationRows extends StatelessWidget {
+  const _LocationRows({required this.mesh});
+
+  final dynamic mesh;
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<Map<int, dynamic>>(
+      stream: mesh.nodeUpdates,
+      builder: (context, _) {
+        if (mesh.gpsFix) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              HduReadout('LAT', '${mesh.gpsLatitude!.toStringAsFixed(5)}'),
+              const SizedBox(height: 2),
+              HduReadout('LONG', '${mesh.gpsLongitude!.toStringAsFixed(5)}'),
+            ],
+          );
+        }
+        if (mesh.approxLatitude != null) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              HduReadout(
+                'LAT (APPROX)',
+                '${mesh.approxLatitude!.toStringAsFixed(5)} '
+                    '· ${mesh.approxSourceCount} device(s)',
+              ),
+              const SizedBox(height: 2),
+              HduReadout(
+                'LONG (APPROX)',
+                '${mesh.approxLongitude!.toStringAsFixed(5)} '
+                    '· ≈${mesh.approxRadiusKm!.toStringAsFixed(1)} km',
+              ),
+            ],
+          );
+        }
+        return const HduReadout('POSITION', 'NO GPS FIX');
+      },
+    );
+  }
+}
+
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key});
 
@@ -194,9 +238,7 @@ class SettingsScreen extends StatelessWidget {
                     children: [
                       HduReadout('CITIZEN ID', app.citizenId),
                       const SizedBox(height: 2),
-                      HduReadout('LAT', app.mesh.latitude.toStringAsFixed(5)),
-                      const SizedBox(height: 2),
-                      HduReadout('LONG', app.mesh.longitude.toStringAsFixed(5)),
+                      _LocationRows(mesh: app.mesh),
                       if (app.officerId != null) ...[
                         const SizedBox(height: 2),
                         HduReadout('OFFICER ID', app.officerId!),

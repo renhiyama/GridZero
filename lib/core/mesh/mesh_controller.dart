@@ -19,23 +19,105 @@ import 'native_mesh.dart';
 import 'simulated_mesh.dart';
 
 class MeshController {
-  MeshController({
-    required this.nodeId,
-    required this.startLatitude,
-    required this.startLongitude,
-    MeshAdapter? adapter,
-  }) : adapter = adapter ?? _pickAdapter() {
+  MeshController({required this.nodeId, MeshAdapter? adapter})
+    : adapter = adapter ?? _pickAdapter() {
     _adapterSub = this.adapter.onPacket.listen(_onRx);
   }
 
   final int nodeId;
-  final double startLatitude;
-  final double startLongitude;
   final MeshAdapter adapter;
 
-  /// Current device position (own node). Fixed origin until GPS lands.
-  double get latitude => startLatitude;
-  double get longitude => startLongitude;
+  /// Own device GPS. Laptops have no radio fix; phones set this via GPS.
+  bool gpsFix = false;
+  double? gpsLatitude;
+  double? gpsLongitude;
+
+  void setGpsFix({required double latitude, required double longitude}) {
+    gpsFix = true;
+    gpsLatitude = latitude;
+    gpsLongitude = longitude;
+  }
+
+  void clearGpsFix() {
+    gpsFix = false;
+    gpsLatitude = null;
+    gpsLongitude = null;
+  }
+
+  /// Raw peer coordinates broadcast with each frame; 0,0 means "no fix".
+  static bool validCoord(double lat, double lon) =>
+      lat.abs() > 1e-6 &&
+      lon.abs() > 1e-6 &&
+      lat >= -90 &&
+      lat <= 90 &&
+      lon >= -180 &&
+      lon <= 180;
+
+  bool _validNode(MeshNodeState n) => validCoord(n.latitude, n.longitude);
+
+  List<MeshNodeState> get _fixNodes => _nodes.values.where(_validNode).toList();
+
+  /// Approximate position derived from GPS-bearing peers (median filter
+  /// rejects a single spoofed far-away coordinate).
+  double? get approxLatitude => _approx().lat;
+  double? get approxLongitude => _approx().lon;
+  int get approxSourceCount => _approx().count;
+  double? get approxRadiusKm => _approx().radiusKm;
+
+  ({double? lat, double? lon, int count, double? radiusKm}) _approxCache = (
+    lat: null,
+    lon: null,
+    count: 0,
+    radiusKm: null,
+  );
+  bool _approxDirty = true;
+
+  ({double? lat, double? lon, int count, double? radiusKm}) _approx() {
+    if (!_approxDirty) return _approxCache;
+    _approxDirty = false;
+    final nodes = _fixNodes;
+    if (nodes.isEmpty) {
+      return _approxCache = (lat: null, lon: null, count: 0, radiusKm: null);
+    }
+    final median = _median(lat: nodes, lon: nodes);
+    // Drop anything farther than 3x the median distance (or 0.5km floor):
+    // a single malicious node far away loses to the consensus.
+    final kept = nodes.where((n) {
+      final d = kmBetween(n.latitude, n.longitude, median.$1, median.$2);
+      return d <= max(median.$3 * 3, 0.5);
+    }).toList();
+    final center = _median(lat: kept, lon: kept);
+    final radius = kept
+        .map((n) => kmBetween(n.latitude, n.longitude, center.$1, center.$2))
+        .fold(0.0, (a, b) => max(a, b));
+    return _approxCache = (
+      lat: center.$1,
+      lon: center.$2,
+      count: kept.length,
+      radiusKm: radius < 0.1 ? 0.1 : radius,
+    );
+  }
+
+  (double, double, double) _median({
+    required List<MeshNodeState> lat,
+    required List<MeshNodeState> lon,
+  }) {
+    final lats = lat.map((n) => n.latitude).toList()..sort();
+    final lons = lon.map((n) => n.longitude).toList()..sort();
+    final ml = lats[lats.length ~/ 2];
+    final mo = lons[lons.length ~/ 2];
+    final dists =
+        lat.map((n) => kmBetween(n.latitude, n.longitude, ml, mo)).toList()
+          ..sort();
+    return (ml, mo, dists[dists.length ~/ 2]);
+  }
+
+  /// Flat-earth km distance (fine for local ~km scales).
+  static double kmBetween(double aLat, double aLon, double bLat, double bLon) {
+    final dLat = (aLat - bLat) * 111.32;
+    final dLon = (aLon - bLon) * 111.32 * cos(bLat * pi / 180);
+    return sqrt(dLat * dLat + dLon * dLon);
+  }
 
   final NonceDeduplicator _dedup = NonceDeduplicator();
   final Map<int, MeshNodeState> _nodes = {};
@@ -80,8 +162,8 @@ class MeshController {
     final packet = _newPacket(
       MeshPacketType.sosBeacon,
       triage: triage,
-      latitude: latitude ?? startLatitude,
-      longitude: longitude ?? startLongitude,
+      latitude: latitude ?? (gpsFix ? gpsLatitude! : 0),
+      longitude: longitude ?? (gpsFix ? gpsLongitude! : 0),
     );
     return broadcast(packet);
   }
@@ -97,8 +179,8 @@ class MeshController {
     final packet = _newPacket(
       MeshPacketType.relayStatus,
       triage: TriageFlags(),
-      latitude: startLatitude,
-      longitude: startLongitude,
+      latitude: gpsFix ? gpsLatitude! : 0,
+      longitude: gpsFix ? gpsLongitude! : 0,
     );
     _dedup.insert(packet.dedupKey);
     return adapter.broadcast(packet);
@@ -134,6 +216,7 @@ class MeshController {
       () => MeshNodeState(nodeId: p.senderId),
     );
     node.updateFrom(rx);
+    _approxDirty = true;
     _nodeUpdates.add(Map.of(_nodes));
 
     if (p.type == MeshPacketType.sosBeacon) {

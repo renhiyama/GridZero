@@ -81,6 +81,7 @@ flutter:
 
   assets:
     - assets/officer_pubkey.pem
+    - assets/icon/gridzero_square_256.png
 
   # To add assets to your application, add an assets section, like this:
   # assets:

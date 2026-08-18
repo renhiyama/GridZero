@@ -67,6 +67,22 @@ static void my_application_activate(GApplication* application) {
   gtk_widget_show(GTK_WIDGET(view));
   gtk_container_add(GTK_CONTAINER(window), GTK_WIDGET(view));
 
+  // GridZero window icon, loaded from the bundled assets so the app works
+  // without a desktop theme icon. Failure is non-fatal.
+  const gchar* icon_assets = fl_dart_project_get_assets_path(project);
+  g_autofree gchar* icon_path =
+      g_build_filename(icon_assets, "assets", "icon", "gridzero_square_256.png",
+                       nullptr);
+  g_autoptr(GError) icon_error = nullptr;
+  g_autoptr(GdkPixbuf) window_icon =
+      gdk_pixbuf_new_from_file(icon_path, &icon_error);
+  if (window_icon != nullptr) {
+    gtk_window_set_icon(window, window_icon);
+  } else {
+    g_warning("GridZero: window icon load failed: %s",
+              icon_error ? icon_error->message : "unknown");
+  }
+
   // Show the window when Flutter renders.
   // Requires the view to be realized so we can start rendering.
   g_signal_connect_swapped(view, "first-frame", G_CALLBACK(first_frame_cb),

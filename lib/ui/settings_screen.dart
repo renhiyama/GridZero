@@ -95,7 +95,7 @@ class SettingsScreen extends StatelessWidget {
           ),
           Expanded(
             child: ListView(
-              padding: const EdgeInsets.all(12),
+              padding: const EdgeInsets.fromLTRB(12, 12, 12, 88),
               children: [
                 HudPanel(
                   title: 'APPEARANCE',

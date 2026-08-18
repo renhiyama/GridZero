@@ -43,6 +43,24 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_daily_claim
 ON sync_records (citizen_id, ration_code, (claimed_at / 86400));
 ''';
 
+/// v3 additions: officer block signatures, revocation blacklist, officer
+/// signing keys. Applied on upgrade; existing v1/v2 DBs keep their rows.
+const String kLedgerSchemaV3 = '''
+ALTER TABLE ledger_records ADD COLUMN signature BLOB;
+ALTER TABLE ledger_records ADD COLUMN signer_public BLOB;
+CREATE TABLE IF NOT EXISTS revocations (
+    citizen_id TEXT PRIMARY KEY,
+    reason_code INTEGER NOT NULL,
+    issued_at INTEGER NOT NULL,
+    source_node INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS officer_keys (
+    officer_id TEXT PRIMARY KEY,
+    signer_public BLOB NOT NULL,
+    signer_private BLOB NOT NULL
+);
+''';
+
 class SqliteLedgerStore implements LedgerStore {
   SqliteLedgerStore(this._db, this._path);
 
@@ -53,13 +71,35 @@ class SqliteLedgerStore implements LedgerStore {
     final db = await factory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 2,
-        onCreate: (db, _) => db.execute(kLedgerSchema),
+        version: 3,
+        onCreate: (db, _) async {
+          await db.execute(kLedgerSchema);
+          await _applyV3(db);
+        },
         // v1 DBs predate sync_records; CREATE IF NOT EXISTS upgrades in place.
-        onUpgrade: (db, _, _) => db.execute(kLedgerSchema),
+        // v2->v3 adds signatures + revocation tables.
+        onUpgrade: (db, oldVersion, _) async {
+          await db.execute(kLedgerSchema);
+          if (oldVersion < 3) await _applyV3(db);
+        },
       ),
     );
     return SqliteLedgerStore(db, path);
+  }
+
+  /// v3 migration: ALTERs fail if the columns already exist (fresh v3 build
+  /// runs this through onCreate too), so each statement is best-effort.
+  static Future<void> _applyV3(Database db) async {
+    final statements = kLedgerSchemaV3.split(';');
+    for (final stmt in statements) {
+      final trimmed = stmt.trim();
+      if (trimmed.isEmpty) continue;
+      try {
+        await db.execute(trimmed);
+      } on Exception {
+        // column already present, or table exists — nothing to migrate.
+      }
+    }
   }
 
   @override
@@ -218,4 +258,66 @@ class SqliteLedgerStore implements LedgerStore {
   @override
   Future<List<Map<String, Object?>>> knownNodes() =>
       _db.query('known_mesh_nodes', orderBy: 'last_seen_epoch DESC');
+
+  @override
+  Future<void> upsertRevocation(RevocationEntry entry) async {
+    await _db.insert('revocations', {
+      'citizen_id': entry.citizenId,
+      'reason_code': entry.reasonCode,
+      'issued_at': entry.issuedAt,
+      'source_node': entry.sourceNode,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  @override
+  Future<void> clearRevocation(String citizenId) async {
+    await _db.delete(
+      'revocations',
+      where: 'citizen_id = ?',
+      whereArgs: [citizenId],
+    );
+  }
+
+  @override
+  Future<List<RevocationEntry>> revocations() async {
+    final rows = await _db.query('revocations', orderBy: 'issued_at DESC');
+    return [
+      for (final r in rows)
+        RevocationEntry(
+          citizenId: r['citizen_id'] as String,
+          reasonCode: r['reason_code'] as int,
+          issuedAt: r['issued_at'] as int,
+          sourceNode: r['source_node'] as int,
+        ),
+    ];
+  }
+
+  @override
+  Future<(List<int>, List<int>)?> officerKey(String officerId) async {
+    final rows = await _db.query(
+      'officer_keys',
+      where: 'officer_id = ?',
+      whereArgs: [officerId],
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    final row = rows.first;
+    return (
+      (row['signer_public'] as List<int>).toList(),
+      (row['signer_private'] as List<int>).toList(),
+    );
+  }
+
+  @override
+  Future<void> saveOfficerKey(
+    String officerId,
+    List<int> publicKey,
+    List<int> privateKey,
+  ) async {
+    await _db.insert('officer_keys', {
+      'officer_id': officerId,
+      'signer_public': publicKey,
+      'signer_private': privateKey,
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
+  }
 }

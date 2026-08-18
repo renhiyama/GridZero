@@ -331,11 +331,12 @@ void main() {
       );
       await Future<void>.delayed(const Duration(milliseconds: 20));
 
-expect(records, hasLength(1));
-    expect(records.single.citizenId, 'CIT-0A3F0FAB');
-    expect(requests, [0x2222]);
-    await ctrl.stop();
-  });
+      expect(records, hasLength(1));
+      expect(records.single.citizenId, 'CIT-0A3F0FAB');
+      expect(requests, [0x2222]);
+      await ctrl.stop();
+    },
+  );
 
   test('payload frames relay with payload intact (no null crash)', () async {
     final adapter = FakeMeshAdapter();

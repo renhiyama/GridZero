@@ -8,6 +8,8 @@ class MemoryLedgerStore implements LedgerStore {
   final List<LedgerRecord> _records = [];
   final List<LedgerRecord> _syncRecords = [];
   final Map<int, Map<String, Object?>> _nodes = {};
+  final Map<String, RevocationEntry> _revocations = {};
+  final Map<String, (List<int>, List<int>)> _officerKeys = {};
 
   @override
   Future<void> close() async {}
@@ -17,6 +19,8 @@ class MemoryLedgerStore implements LedgerStore {
     _records.clear();
     _syncRecords.clear();
     _nodes.clear();
+    _revocations.clear();
+    _officerKeys.clear();
   }
 
   @override
@@ -113,4 +117,34 @@ class MemoryLedgerStore implements LedgerStore {
   @override
   Future<List<Map<String, Object?>>> knownNodes() async =>
       _nodes.values.toList();
+
+  @override
+  Future<void> upsertRevocation(RevocationEntry entry) async {
+    _revocations[entry.citizenId] = entry;
+  }
+
+  @override
+  Future<void> clearRevocation(String citizenId) async {
+    _revocations.remove(citizenId);
+  }
+
+  @override
+  Future<List<RevocationEntry>> revocations() async {
+    final entries = _revocations.values.toList()
+      ..sort((a, b) => b.issuedAt.compareTo(a.issuedAt));
+    return entries;
+  }
+
+  @override
+  Future<(List<int>, List<int>)?> officerKey(String officerId) async =>
+      _officerKeys[officerId];
+
+  @override
+  Future<void> saveOfficerKey(
+    String officerId,
+    List<int> publicKey,
+    List<int> privateKey,
+  ) async {
+    _officerKeys[officerId] = (publicKey, privateKey);
+  }
 }

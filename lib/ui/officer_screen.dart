@@ -12,6 +12,7 @@ import 'package:permission_handler/permission_handler.dart';
 import '../app_scope.dart';
 import '../core/app_state.dart';
 import '../core/ledger/ledger_store.dart';
+import '../core/mesh_packet.dart';
 import 'hud_theme.dart';
 import 'linux_qr_scan_page.dart';
 import 'mesh_map.dart';
@@ -281,6 +282,7 @@ class _ScanTab extends StatefulWidget {
 class _ScanTabState extends State<_ScanTab> {
   final _ctrl = TextEditingController();
   String _rationCode = 'Rice';
+  String? _lastCitizenId;
 
   static const _items = ['Rice', 'Water', 'Blanket', 'Medicine', 'Fuel'];
 
@@ -296,6 +298,9 @@ class _ScanTabState extends State<_ScanTab> {
   void _showClaimResult(ClaimResult result) {
     final p = AppPalette.of(context);
     widget.onResult(result);
+    if (result.ok) {
+      _lastCitizenId = result.record!.citizenId;
+    }
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
@@ -304,6 +309,23 @@ class _ScanTabState extends State<_ScanTab> {
           result.ok
               ? 'GRANTED: ${result.record!.citizenId} / ${result.record!.rationCode}'
               : result.message,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _flag(String citizenId, int reasonCode) async {
+    await widget.app.revokeCitizen(citizenId, reasonCode: reasonCode);
+    if (!mounted) return;
+    final p = AppPalette.of(context);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        backgroundColor: reasonCode == kRevokeCleared ? p.primary : p.error,
+        content: Text(
+          reasonCode == kRevokeCleared
+              ? 'CLEARED $citizenId — broadcast over mesh'
+              : 'FLAGGED ${revocationReasonLabel(reasonCode).toUpperCase()}: '
+                    '$citizenId — broadcast over mesh',
         ),
       ),
     );
@@ -378,6 +400,48 @@ class _ScanTabState extends State<_ScanTab> {
           ],
         ),
         const SizedBox(height: 12),
+        if (_lastCitizenId != null) ...[
+          HudPanel(
+            title: 'CARD ACTIONS',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                HduReadout('LAST CITIZEN', _lastCitizenId!),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: FilledButton(
+                        style: FilledButton.styleFrom(
+                          backgroundColor: p.error,
+                          foregroundColor: p.bg,
+                        ),
+                        onPressed: () => _flag(_lastCitizenId!, kRevokeStolen),
+                        child: const Text('FLAG STOLEN'),
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: FilledButton(
+                        onPressed: () =>
+                            _flag(_lastCitizenId!, kRevokeSuspended),
+                        child: const Text('SUSPEND'),
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: FilledButton(
+                        onPressed: () => _flag(_lastCitizenId!, kRevokeCleared),
+                        child: const Text('CLEAR'),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+        ],
         HduReadout(
           'VERIFY PATH',
           'TOTP-HMAC-SHA256 30s window ▸ daily-duplicate rejection ▸ append-only chain',
@@ -400,7 +464,7 @@ class _LedgerTab extends StatelessWidget {
       builder: (context, snapshot) {
         final records = snapshot.data ?? const <LedgerRecord>[];
         return ListView(
-          padding: const EdgeInsets.all(12),
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 88),
           children: [
             HduReadout('RECORDS', '${records.length}'),
             HduReadout(

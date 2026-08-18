@@ -4,6 +4,8 @@
 ///   Byte 0     MAGIC       0xA5
 ///   Byte 1     TYPE        0x01 SOS | 0x02 Relay Status | 0x03 Ledger Sync Req
 ///                          | 0x04 Identity | 0x05 Ledger Record
+///                          | 0x06 Revocation Alert | 0x07 Account Record
+///                          | 0x08 Account Request
 ///   Bytes 2-3  SENDER_ID   uint16 node id hash suffix
 ///   Bytes 4-7  LATITUDE    int32 fixed point lat * 1e7
 ///   Bytes 8-11 LONGITUDE   int32 fixed point lon * 1e7
@@ -14,12 +16,17 @@
 ///   Byte 17    FLAGS       bit0 = SOS cleared marker
 ///   Bytes 18-21 ALTITUDE   int32 altitude in cm; 0x80000000 = no data
 ///
-/// Identity (0x04) and ledger-record (0x05) frames repurpose bytes 4-21 as
-/// payload, since they carry no coordinates:
+/// Identity (0x04), ledger-record (0x05), revocation (0x06) and account
+/// (0x07) frames repurpose bytes 4-21 as payload, since they carry no
+/// coordinates:
 ///   0x04  [4-7][8-11][18-21] username ascii (≤12 chars)
 ///         [12] role (1 citizen, 2 officer, 3 admin) [17] username length
 ///   0x05  [4-7] citizenId hex [8-11] officerId hex [18-21] claimedAt epoch32
 ///         [12] ration code index (0..4 | 0x0F other) [17] bit0 = record marker
+///   0x06  [4-7] citizenId bits [8-11] sha256 id digest tag [18-21] issuedAt
+///         [12] reason (0 stolen, 1 suspended, 2 cleared)
+///   0x07  [4] chunk index [12] total chunks [17] reserved
+///         [5-7][8-11][18-21] 11-byte credential blob slice
 library;
 
 import 'dart:convert';
@@ -53,12 +60,27 @@ const List<String> kRationCodes = [
   'Fuel',
 ];
 
+/// Revocation reason codes (wire 0x06 byte 12).
+const int kRevokeStolen = 0;
+const int kRevokeSuspended = 1;
+const int kRevokeCleared = 2;
+
+String revocationReasonLabel(int code) => switch (code) {
+  kRevokeStolen => 'STOLEN',
+  kRevokeSuspended => 'SUSPENDED',
+  kRevokeCleared => 'CLEARED',
+  _ => 'CODE $code',
+};
+
 enum MeshPacketType {
   sosBeacon(0x01),
   relayStatus(0x02),
   ledgerSyncRequest(0x03),
   identityAnnounce(0x04),
-  ledgerRecord(0x05);
+  ledgerRecord(0x05),
+  revocationAlert(0x06),
+  accountRecord(0x07),
+  accountRequest(0x08);
 
   const MeshPacketType(this.value);
 
@@ -130,9 +152,83 @@ class CompactRecord {
   final String rationCode;
 }
 
+/// A stolen/suspended ration card flagged by an officer (0x06). Bytes 4-7
+/// hold the card tag so it can be diffused without the full id on air.
+class RevocationAlert {
+  RevocationAlert({
+    required this.citizenId,
+    required this.reasonCode,
+    required this.issuedAt,
+  });
+
+  final String citizenId;
+  final int reasonCode;
+  final int issuedAt;
+}
+
+/// One slice of a chunked account credential (0x07). A full account is
+/// ~46 bytes (name ≤12 + role + 32-byte password hash), far beyond a single
+/// frame, so it travels as consecutive 11-byte blobs with an index and total.
+class AccountChunk {
+  AccountChunk({required this.index, required this.total, required this.data});
+
+  final int index;
+  final int total;
+  final Uint8List data;
+}
+
+/// Splits an account credential into 11-byte chunks for the mesh.
+/// Blob layout: [nameLen][name ascii][role][password-hash 32B].
+List<AccountChunk> buildAccountChunks(
+  String username,
+  int roleCode,
+  List<int> hashBytes,
+) {
+  final name = username.toUpperCase().codeUnits.take(12).toList();
+  final blob = <int>[name.length, ...name, roleCode, ...hashBytes];
+  final total = (blob.length / 11).ceil();
+  return [
+    for (var i = 0; i < total; i++)
+      AccountChunk(
+        index: i,
+        total: total,
+        data: Uint8List(11)
+          ..setRange(0, (blob.length - i * 11).clamp(0, 11), blob.skip(i * 11)),
+      ),
+  ];
+}
+
+/// Reassembles account chunks into (username, roleCode, hashBytes). Returns
+/// null until every chunk is present or the blob is malformed.
+({String username, int roleCode, List<int> hashBytes})? assembleAccount(
+  List<AccountChunk> chunks,
+) {
+  if (chunks.isEmpty) return null;
+  final expected = chunks.first.total;
+  if (chunks.length != expected) return null;
+  final byIndex = {for (final c in chunks) c.index: c};
+  if (byIndex.length != expected) return null;
+  final blob = <int>[];
+  for (var i = 0; i < expected; i++) {
+    final c = byIndex[i];
+    if (c == null) return null;
+    blob.addAll(c.data);
+  }
+  final len = blob[0];
+  if (len < 1 || len > 12) return null;
+  final role = blob[1 + len];
+  final hash = blob.sublist(1 + len + 1, 1 + len + 1 + 32);
+  if (hash.length != 32) return null;
+  return (
+    username: String.fromCharCodes(blob.sublist(1, 1 + len)),
+    roleCode: role,
+    hashBytes: hash,
+  );
+}
+
 /// Packs "CIT-XXXXXXXX" / "OFF-XXXXXXXX" into 4 bytes. Anything not in that
 /// shape hashes down to a stable 4-byte tag instead of corrupting the frame.
-int _idToBits(String id) {
+int idToBits(String id) {
   final hex = id.split('-').last.toUpperCase();
   if (hex.length == 8 && RegExp(r'^[0-9A-F]{8}$').hasMatch(hex)) {
     return int.parse(hex, radix: 16);
@@ -141,7 +237,7 @@ int _idToBits(String id) {
   return (digest[0] << 24) | (digest[1] << 16) | (digest[2] << 8) | digest[3];
 }
 
-String _bitsToId(String prefix, int bits) =>
+String bitsToId(String prefix, int bits) =>
     '$prefix${(bits & 0xffffffff).toRadixString(16).padLeft(8, '0').toUpperCase()}';
 
 class MeshPacket {
@@ -159,6 +255,8 @@ class MeshPacket {
     this.identityUsername,
     this.identityRole,
     this.syncRecord,
+    this.revocation,
+    this.accountChunk,
   });
 
   final MeshPacketType type;
@@ -185,6 +283,12 @@ class MeshPacket {
 
   /// Ledger payload (type == ledgerRecord); null on a plain sync request.
   final CompactRecord? syncRecord;
+
+  /// Revocation payload (type == revocationAlert).
+  final RevocationAlert? revocation;
+
+  /// Account credential slice (type == accountRecord).
+  final AccountChunk? accountChunk;
 
   /// Altitude in cm above sea level, or null when unknown.
   final int? altitudeCm;
@@ -222,15 +326,36 @@ class MeshPacket {
         out[17] = name.length;
       case MeshPacketType.ledgerRecord:
         final rec = syncRecord;
-        bd.setInt32(4, _idToBits(rec!.citizenId), Endian.big);
-        bd.setInt32(8, _idToBits(rec.officerId), Endian.big);
+        bd.setInt32(4, idToBits(rec!.citizenId), Endian.big);
+        bd.setInt32(8, idToBits(rec.officerId), Endian.big);
         bd.setUint32(18, rec.claimedAt, Endian.big);
         final idx = kRationCodes.indexOf(rec.rationCode);
         out[12] = idx >= 0 ? idx : 0x0f;
         out[17] = 0x01;
+      case MeshPacketType.revocationAlert:
+        final rev = revocation!;
+        bd.setInt32(4, idToBits(rev.citizenId), Endian.big);
+        final digest = sha256.convert(utf8.encode(rev.citizenId)).bytes;
+        bd.setInt32(
+          8,
+          (digest[4] << 24) | (digest[5] << 16) | (digest[6] << 8) | digest[7],
+          Endian.big,
+        );
+        out[12] = rev.reasonCode & 0xff;
+        bd.setUint32(18, rev.issuedAt, Endian.big);
+        out[17] = 0;
+      case MeshPacketType.accountRecord:
+        final c = accountChunk!;
+        out[4] = c.index;
+        out[12] = c.total;
+        out.setRange(5, 8, c.data.sublist(0, 3));
+        out.setRange(8, 12, c.data.sublist(3, 7));
+        out.setRange(18, 22, c.data.sublist(7, 11));
+        out[17] = 0;
       case MeshPacketType.ledgerSyncRequest:
       case MeshPacketType.sosBeacon:
       case MeshPacketType.relayStatus:
+      case MeshPacketType.accountRequest:
         bd.setInt32(4, _fixedPoint(latitude, 10000000), Endian.big);
         bd.setInt32(8, _fixedPoint(longitude, 10000000), Endian.big);
         out[12] = triage.value;
@@ -259,7 +384,8 @@ class MeshPacket {
     final carriesCoords = switch (type) {
       MeshPacketType.sosBeacon ||
       MeshPacketType.relayStatus ||
-      MeshPacketType.ledgerSyncRequest => true,
+      MeshPacketType.ledgerSyncRequest ||
+      MeshPacketType.accountRequest => true,
       _ => false,
     };
     final base = MeshPacket(
@@ -310,17 +436,54 @@ class MeshPacket {
           flags: 0x01,
           altitudeCm: null,
           syncRecord: CompactRecord(
-            citizenId: _bitsToId('CIT-', bd.getInt32(4, Endian.big)),
-            officerId: _bitsToId('OFF-', bd.getInt32(8, Endian.big)),
+            citizenId: bitsToId('CIT-', bd.getInt32(4, Endian.big)),
+            officerId: bitsToId('OFF-', bd.getInt32(8, Endian.big)),
             claimedAt: bd.getUint32(18, Endian.big),
             rationCode: code == 0x0f
                 ? 'Other'
                 : (code < kRationCodes.length ? kRationCodes[code] : 'Other'),
           ),
         );
-      case MeshPacketType.ledgerSyncRequest:
+      case MeshPacketType.revocationAlert:
+        return MeshPacket(
+          type: type,
+          senderId: base.senderId,
+          latitude: 0,
+          longitude: 0,
+          triage: TriageFlags(),
+          seq: base.seq,
+          initialTtl: base.initialTtl,
+          hopCount: base.hopCount,
+          flags: 0,
+          altitudeCm: null,
+          revocation: RevocationAlert(
+            citizenId: bitsToId('CIT-', bd.getInt32(4, Endian.big)),
+            reasonCode: raw[12],
+            issuedAt: bd.getUint32(18, Endian.big),
+          ),
+        );
+      case MeshPacketType.accountRecord:
+        final data = Uint8List(11);
+        data.setRange(0, 3, raw.sublist(5, 8));
+        data.setRange(3, 7, raw.sublist(8, 12));
+        data.setRange(7, 11, raw.sublist(18, 22));
+        return MeshPacket(
+          type: type,
+          senderId: base.senderId,
+          latitude: 0,
+          longitude: 0,
+          triage: TriageFlags(),
+          seq: base.seq,
+          initialTtl: base.initialTtl,
+          hopCount: base.hopCount,
+          flags: 0,
+          altitudeCm: null,
+          accountChunk: AccountChunk(index: raw[4], total: raw[12], data: data),
+        );
       case MeshPacketType.sosBeacon:
       case MeshPacketType.relayStatus:
+      case MeshPacketType.ledgerSyncRequest:
+      case MeshPacketType.accountRequest:
         return MeshPacket(
           type: type,
           senderId: base.senderId,

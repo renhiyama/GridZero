@@ -14,6 +14,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'ledger/ledger_store.dart';
+import 'ledger/officer_sign.dart';
 import 'ledger/open.dart';
 import 'master_key.dart';
 import 'mesh/bluez_mesh.dart';
@@ -71,6 +72,23 @@ class AppState extends ChangeNotifier {
   int claimCount = 0;
   bool initialized = false;
 
+  /// Cards flagged stolen/suspended (canonical citizen id -> reason code).
+  /// Diffused by officers over the mesh and persisted in the ledger store.
+  final Map<String, int> _revoked = {};
+  Map<String, int> get revokedCitizens => Map.unmodifiable(_revoked);
+
+  /// Credentials heard on the mesh: username -> (role, full password hash).
+  /// Assembled from chunked account frames so a fresh device can adopt an
+  /// account it has never registered locally. Trust model is physical
+  /// adjacency: anyone within BLE range can register a shadow account, the
+  /// same threat the mesh accepts for every other frame.
+  final Map<String, ({String username, int roleCode, List<int> hashBytes})>
+  _meshAccounts = {};
+
+  /// Per-sender account chunk assembly buffers.
+  final Map<int, _ChunkBuf> _chunkBufs = {};
+  static const int _chunkBufCap = 16;
+
   /// Tab switch requested by a deep link or notification tap; the shell
   /// consumes it and resets it to null.
   final ValueNotifier<int?> navRequest = ValueNotifier<int?>(null);
@@ -114,9 +132,13 @@ class AppState extends ChangeNotifier {
   }
 
   /// Loads persistence only. The mesh transport is brought up by [login] so
-  /// nobody advertises before they identify themselves.
-  Future<void> init() async {
-    ledger = await openLedgerStore();
+  /// nobody advertises before they identify themselves. [store] lets tests
+  /// share one ledger across several AppState instances.
+  Future<void> init({LedgerStore? store}) async {
+    ledger = store ?? await openLedgerStore();
+    for (final r in await ledger.revocations()) {
+      _revoked[r.citizenId] = r.reasonCode;
+    }
     initialized = true;
     notifyListeners();
   }
@@ -133,7 +155,8 @@ class AppState extends ChangeNotifier {
       'CIT-${sha256.convert(utf8.encode(seed)).toString().substring(0, 8).toUpperCase()}';
 
   /// Login gate. ADMIN bypasses password (prototype HQ). Other users must
-  /// exist and match their stored password hash.
+  /// exist locally and match their stored password hash, or be adoptable from
+  /// an adjacent terminal that announced the account over the mesh.
   Future<String?> login(String username, String password) async {
     final name = username.trim().toUpperCase();
     if (name.isEmpty) return 'enter a username';
@@ -143,9 +166,103 @@ class AppState extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     final accounts = _readAccounts(prefs);
     final account = accounts[name];
-    if (account == null) return 'no account for $name — register first';
-    if (account.hash != _hashPassword(password)) return 'wrong password';
-    return _startSession(username: name, role: account.role);
+    if (account != null) {
+      if (account.hash != _hashPassword(password)) return 'wrong password';
+      return _startSession(username: name, role: account.role);
+    }
+    // Not local: ask the mesh whether a neighbouring terminal holds this
+    // account, then adopt it if the password verifies (cross-device login).
+    return _loginViaMesh(name, password);
+  }
+
+  /// Fresh-device login probe: bring up the radio anonymously for a short
+  /// window, request account announcements, and adopt the target account when
+  /// its credential hash matches the typed password. ADMIN is never probed.
+  Future<String?> _loginViaMesh(String name, String password) async {
+    final targetHash = _hexBytes(_hashPassword(password));
+    final m = _buildMesh(_seed());
+    m.onAccountChunk = _onAccountChunk;
+    m.onAccountRequest = (_) => _broadcastLocalAccounts();
+    await m.start();
+    await m.broadcastAccountRequest();
+    try {
+      final deadline = DateTime.now().add(const Duration(seconds: 6));
+      while (DateTime.now().isBefore(deadline)) {
+        final account = _meshAccounts[name];
+        if (account != null) {
+          if (_bytesEqual(account.hashBytes, targetHash)) {
+            final role = switch (account.roleCode) {
+              kRoleOfficer => Role.officer,
+              _ => Role.citizen,
+            };
+            await _importAccount(name, role, _hashPassword(password));
+            final err = await _startSession(username: name, role: role);
+            return err;
+          }
+          return 'wrong password';
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 150));
+      }
+      return 'no account $name heard on the mesh — register first, or bring '
+          'the device holding that account within range';
+    } finally {
+      await m.stop();
+      _chunkBufs.clear();
+      _meshAccounts.clear();
+    }
+  }
+
+  Future<void> _importAccount(String username, Role role, String hash) async {
+    final prefs = await SharedPreferences.getInstance();
+    final accounts = _readAccounts(prefs);
+    accounts[username] = Account(username: username, role: role, hash: hash);
+    await _writeAccounts(prefs, accounts);
+  }
+
+  static bool _bytesEqual(List<int> a, List<int> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
+
+  /// Assemble one credential chunk into the per-sender buffer; when a full
+  /// account is complete it joins the mesh account registry.
+  void _onAccountChunk(AccountChunk c, int fromNodeId) {
+    if (_chunkBufs.length >= _chunkBufCap) {
+      _chunkBufs.remove(_chunkBufs.keys.first);
+    }
+    final buf = _chunkBufs.putIfAbsent(fromNodeId, _ChunkBuf.new);
+    if (c.index == 0) buf.reset();
+    if (c.index != buf.next)
+      return; // out of order / restarted; next burst heals
+    buf.add(c);
+    if (buf.next == c.total) {
+      final account = assembleAccount(buf.chunks);
+      if (account != null) {
+        _meshAccounts[account.username] = account;
+        notifyListeners();
+      }
+      buf.reset();
+    }
+  }
+
+  /// Respond to a login probe by announcing every local account (twice, so a
+  /// single lost frame doesn't strand the probe).
+  Future<void> _broadcastLocalAccounts() async {
+    final m = mesh;
+    if (m == null) return;
+    final prefs = await SharedPreferences.getInstance();
+    for (final entry in _readAccounts(prefs).entries) {
+      final chunks = buildAccountChunks(
+        entry.key,
+        _roleCode(entry.value.role),
+        _hexBytes(entry.value.hash),
+      );
+      await m.broadcastAccount(chunks);
+      await m.broadcastAccount(chunks);
+    }
   }
 
   /// Creates a local account then logs it in.
@@ -205,12 +322,17 @@ class AppState extends ChangeNotifier {
     final m = mesh!;
     m.onLedgerRecord = _onLedgerRecord;
     m.onLedgerSyncRequest = (_) => _pushPendingRecords();
+    m.onRevocation = _onRevocation;
+    m.onAccountChunk = _onAccountChunk;
+    m.onAccountRequest = (_) => _broadcastLocalAccounts();
     _knownPeerIds.clear();
     m.nodeUpdates.listen(_onPeerDiscovery);
     await m.start();
     m.announce();
     // Tell peers who we are so their peer list shows a name, not a hex id.
     m.broadcastIdentity(username, _roleCode(role));
+    // Seed the mesh account registry so fresh devices can adopt this account.
+    await _broadcastLocalAccounts();
     _heartbeat = Timer.periodic(const Duration(seconds: 10), (_) {
       final mesh = this.mesh;
       if (mesh == null) return;
@@ -290,6 +412,55 @@ class AppState extends ChangeNotifier {
     if (result.ok) notifyListeners();
   }
 
+  /// Absorb a stolen/suspended card alert relayed from another officer. A
+  /// CLEARED alert unflags the card. Persisted so the blacklist survives
+  /// restarts and stays consistent with the HQ dashboard.
+  Future<void> _onRevocation(RevocationAlert alert, int fromNodeId) async {
+    final canon = bitsToId('CIT-', idToBits(alert.citizenId));
+    if (alert.reasonCode == kRevokeCleared) {
+      _revoked.remove(canon);
+      await ledger.clearRevocation(canon);
+    } else {
+      _revoked[canon] = alert.reasonCode;
+      await ledger.upsertRevocation(
+        RevocationEntry(
+          citizenId: canon,
+          reasonCode: alert.reasonCode,
+          issuedAt: alert.issuedAt,
+          sourceNode: fromNodeId,
+        ),
+      );
+    }
+    notifyListeners();
+  }
+
+  /// Officer/admin action: flag a citizen's card as stolen/suspended, diffuse
+  /// the alert over the mesh, and persist it. Cleared removes the flag.
+  Future<void> revokeCitizen(
+    String citizenId, {
+    required int reasonCode,
+  }) async {
+    if (_role != Role.officer && _role != Role.admin) return;
+    final canon = bitsToId('CIT-', idToBits(citizenId));
+    final m = mesh;
+    if (reasonCode == kRevokeCleared) {
+      _revoked.remove(canon);
+      await ledger.clearRevocation(canon);
+      m?.broadcastRevocation(canon, reasonCode: kRevokeCleared);
+    } else {
+      _revoked[canon] = reasonCode;
+      final entry = RevocationEntry(
+        citizenId: canon,
+        reasonCode: reasonCode,
+        issuedAt: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        sourceNode: m?.nodeId ?? 0,
+      );
+      await ledger.upsertRevocation(entry);
+      m?.broadcastRevocation(canon, reasonCode: reasonCode);
+    }
+    notifyListeners();
+  }
+
   /// Stops the radio and returns to the login screen. Identity and ledger
   /// stay intact — use [deleteAllData] to erase everything.
   Future<void> logout() async {
@@ -304,6 +475,8 @@ class AppState extends ChangeNotifier {
       await m.stop();
     }
     _knownPeerIds.clear();
+    _meshAccounts.clear();
+    _chunkBufs.clear();
     _heartbeatTick = 0;
     loggedIn = false;
     _username = '';
@@ -318,6 +491,7 @@ class AppState extends ChangeNotifier {
   Future<void> deleteAllData() async {
     await logout();
     await ledger.wipe();
+    _revoked.clear();
     ledger = await openLedgerStore();
     final prefs = await SharedPreferences.getInstance();
     await prefs.clear();
@@ -458,13 +632,23 @@ class AppState extends ChangeNotifier {
     required String rationCode,
     required String officerId,
   }) async {
+    final revokedReason = _revoked[bitsToId('CIT-', idToBits(citizenId))];
+    if (revokedReason != null) {
+      return ClaimResult(
+        ClaimStatus.revoked,
+        message:
+            'citizen ${bitsToId('CIT-', idToBits(citizenId))} card is '
+            '${revocationReasonLabel(revokedReason)} — claims refused',
+      );
+    }
     final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
     final prevHash = await ledger.lastHash();
+    final recordId = sha256
+        .convert(utf8.encode('$citizenId|$rationCode|$now'))
+        .toString()
+        .substring(0, 24);
     final record = LedgerRecord(
-      recordId: sha256
-          .convert(utf8.encode('$citizenId|$rationCode|$now'))
-          .toString()
-          .substring(0, 24),
+      recordId: recordId,
       citizenId: citizenId,
       rationCode: rationCode,
       claimedAt: now,
@@ -473,6 +657,18 @@ class AppState extends ChangeNotifier {
       currentHash: '',
     );
     record.currentHash = record.computeCurrentHash();
+    if (_role == Role.officer) {
+      final signed = await _signRecord(record);
+      if (signed == null) {
+        return ClaimResult(
+          ClaimStatus.error,
+          message: 'could not initialise officer signing key',
+        );
+      }
+      record
+        ..signature = signed.$1
+        ..signerPublic = signed.$2;
+    }
     final result = await ledger.append(record);
     if (result.ok) {
       claimCount++;
@@ -494,6 +690,24 @@ class AppState extends ChangeNotifier {
     }
     notifyListeners();
     return result;
+  }
+
+  /// Signs a claim block with the officer's deterministic ECDSA-P256 key,
+  /// creating the keypair on first use. Returns (signature, publicKey) or
+  /// null when signing failed.
+  Future<(List<int>, List<int>)?> _signRecord(LedgerRecord record) async {
+    final officerId = this.officerId ?? 'OFF-UNENLISTED';
+    var key = await ledger.officerKey(officerId);
+    if (key == null) {
+      final fresh = generateOfficerKey();
+      await ledger.saveOfficerKey(officerId, fresh.$1, fresh.$2);
+      key = fresh;
+    }
+    try {
+      return (signOfficerRecord(key.$2, record.recordData()), key.$1);
+    } on Exception {
+      return null;
+    }
   }
 
   Map<String, Object?>? _decodeClaimPayload(String payload) {
@@ -531,5 +745,27 @@ class AppState extends ChangeNotifier {
     mesh?.stop();
     ledger.close();
     super.dispose();
+  }
+}
+
+/// Hex string -> raw bytes (sha256 password hashes travel as hex in prefs).
+List<int> _hexBytes(String hex) => [
+  for (var i = 0; i + 2 <= hex.length; i += 2)
+    int.parse(hex.substring(i, i + 2), radix: 16),
+];
+
+/// In-order chunk accumulator for one sender's account credential.
+class _ChunkBuf {
+  int next = 0;
+  final List<AccountChunk> chunks = [];
+
+  void reset() {
+    next = 0;
+    chunks.clear();
+  }
+
+  void add(AccountChunk c) {
+    chunks.add(c);
+    next++;
   }
 }

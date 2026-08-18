@@ -11,6 +11,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 
 import '../app_scope.dart';
 import '../core/ledger/ledger_store.dart';
+import '../core/ledger/officer_sign.dart';
 import '../core/master_key.dart';
 import '../core/mesh/mesh_node.dart';
 import '../core/mesh_packet.dart';
@@ -100,6 +101,7 @@ class _HqScreenState extends State<HqScreen> {
                   palette: AppPalette.of(context),
                 );
                 final logs = _LogsPanel(app: app);
+                final revocations = _RevocationsPanel(app: app);
 
                 if (wide) {
                   return Row(
@@ -126,6 +128,8 @@ class _HqScreenState extends State<HqScreen> {
                             peers,
                             const SizedBox(height: 12),
                             logs,
+                            const SizedBox(height: 12),
+                            revocations,
                           ],
                         ),
                       ),
@@ -133,7 +137,7 @@ class _HqScreenState extends State<HqScreen> {
                   );
                 }
                 return ListView(
-                  padding: const EdgeInsets.all(12),
+                  padding: const EdgeInsets.fromLTRB(12, 12, 12, 88),
                   children: [
                     telemetry,
                     const SizedBox(height: 12),
@@ -146,6 +150,8 @@ class _HqScreenState extends State<HqScreen> {
                     peers,
                     const SizedBox(height: 12),
                     logs,
+                    const SizedBox(height: 12),
+                    revocations,
                   ],
                 );
               },
@@ -493,6 +499,18 @@ class _LogsPanel extends StatelessWidget {
 
   final dynamic app;
 
+  /// Compact signature verdict for the audit line: verified, tampered, or
+  /// unsigned (claims made before officer signing shipped).
+  static String _sigBadge(LedgerRecord r) {
+    if (r.signature == null || r.signerPublic == null) return 'NOSIG';
+    final ok = verifyOfficerRecord(
+      r.signerPublic!,
+      r.recordData(),
+      r.signature!,
+    );
+    return ok ? 'SIG✓' : 'SIG✗';
+  }
+
   @override
   Widget build(BuildContext context) {
     final p = AppPalette.of(context);
@@ -513,7 +531,8 @@ class _LogsPanel extends StatelessWidget {
                         child: Text(
                           '[${r.claimedAt}] ${r.citizenId} → '
                           '${r.rationCode} by ${r.officerId} '
-                          '·${r.currentHash.substring(0, 8)}',
+                          '·${r.currentHash.substring(0, 8)} '
+                          '${_sigBadge(r)}',
                           style: TextStyle(
                             color: p.text,
                             fontFamily: 'monospace',
@@ -523,6 +542,57 @@ class _LogsPanel extends StatelessWidget {
                       ),
                   ],
                 ),
+        );
+      },
+    );
+  }
+}
+
+/// Card revocation list: which citizen IDs are blacklisted and why, as
+/// relayed by field officers (0x06 frames) and persisted locally. Stolen and
+/// suspended cards are refused at every claim point; cleared restores them.
+///
+/// AnimatedBuilder re-runs the future on every app notify, so a revocation
+/// alert arriving over the mesh repaints the panel immediately.
+class _RevocationsPanel extends StatelessWidget {
+  const _RevocationsPanel({required this.app});
+
+  final dynamic app;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = AppPalette.of(context);
+    return AnimatedBuilder(
+      animation: app,
+      builder: (context, _) {
+        return FutureBuilder<List<RevocationEntry>>(
+          future: app.ledger.revocations(),
+          builder: (context, snapshot) {
+            final entries = snapshot.data ?? const <RevocationEntry>[];
+            return HudPanel(
+              title: 'CARD REVOCATIONS',
+              child: entries.isEmpty
+                  ? const HduReadout('STATUS', 'no cards flagged')
+                  : Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        for (final e in entries)
+                          Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 2),
+                            child: Text(
+                              '${e.citizenId} ${revocationReasonLabel(e.reasonCode)} '
+                              '· node ${e.sourceNode} · ${e.issuedAt}',
+                              style: TextStyle(
+                                color: p.primary,
+                                fontFamily: 'monospace',
+                                fontSize: 10,
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+            );
+          },
         );
       },
     );

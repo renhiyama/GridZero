@@ -20,6 +20,8 @@ class LedgerRecord {
     required this.prevHash,
     required this.currentHash,
     this.syncStatus = 0,
+    this.signature,
+    this.signerPublic,
   });
 
   final String recordId;
@@ -38,7 +40,14 @@ class LedgerRecord {
   /// flag records as shipped after they leave on the mesh.
   int syncStatus;
 
-  /// Canonical record data used to build the chain hash.
+  /// Officer ECDSA-P256 signature over [recordData] (64 bytes r||s) and the
+  /// issuer's 65-byte uncompressed public key. Non-repudiation anchor for HQ
+  /// audit; sync does not broadcast these, only the sender's own chain holds
+  /// them. Mutable so the claim builder can attach them after hashing.
+  List<int>? signature;
+  List<int>? signerPublic;
+
+  /// Canonical record data used to build the chain hash and sign.
   String recordData() =>
       '$recordId|$citizenId|$rationCode|$claimedAt|$officerId';
 
@@ -54,6 +63,8 @@ class LedgerRecord {
     'prev_hash': prevHash,
     'current_hash': currentHash,
     'sync_status': syncStatus,
+    'signature': signature,
+    'signer_public': signerPublic,
   };
 
   factory LedgerRecord.fromMap(Map<String, Object?> map) => LedgerRecord(
@@ -65,10 +76,19 @@ class LedgerRecord {
     prevHash: map['prev_hash'] as String,
     currentHash: map['current_hash'] as String,
     syncStatus: map['sync_status'] as int? ?? 0,
+    signature: map['signature'] as List<int>?,
+    signerPublic: map['signer_public'] as List<int>?,
   );
 }
 
-enum ClaimStatus { granted, duplicate, invalidToken, chainMismatch, error }
+enum ClaimStatus {
+  granted,
+  duplicate,
+  invalidToken,
+  chainMismatch,
+  revoked,
+  error,
+}
 
 class ClaimResult {
   ClaimResult(this.status, {this.message = '', this.record});
@@ -89,6 +109,21 @@ class SyncResult {
   final String message;
 
   bool get ok => status == SyncStatus.merged;
+}
+
+/// A card flagged stolen/suspended/cleared on the mesh.
+class RevocationEntry {
+  RevocationEntry({
+    required this.citizenId,
+    required this.reasonCode,
+    required this.issuedAt,
+    required this.sourceNode,
+  });
+
+  final String citizenId;
+  final int reasonCode;
+  final int issuedAt;
+  final int sourceNode;
 }
 
 /// Persistence contract used by both the SQLite and in-memory backends.
@@ -134,4 +169,22 @@ abstract class LedgerStore {
   });
 
   Future<List<Map<String, Object?>>> knownNodes();
+
+  /// Revocation state (FR: stolen-card blacklist). Upsert by citizen id;
+  /// reason kRevokeCleared removes the flag.
+  Future<void> upsertRevocation(RevocationEntry entry);
+
+  Future<void> clearRevocation(String citizenId);
+
+  Future<List<RevocationEntry>> revocations();
+
+  /// Officer signing keypair for block signatures. Returns
+  /// ([publicKey], [privateKey]) or null when the officer has no key yet.
+  Future<(List<int>, List<int>)?> officerKey(String officerId);
+
+  Future<void> saveOfficerKey(
+    String officerId,
+    List<int> publicKey,
+    List<int> privateKey,
+  );
 }

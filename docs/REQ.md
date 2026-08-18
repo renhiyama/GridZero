@@ -210,6 +210,12 @@ FR-3.5: Local ledger records MUST propagate to other terminals (HQ aggregation) 
 
 FR-3.6: Every terminal MUST announce its account identity (username + role) over the mesh so peer lists and HQ dashboards show names rather than bare node ids.
 
+FR-3.7: Officer and HQ terminals MUST be able to flag a citizen card as stolen or suspended by diffusing a revocation alert (0x06) over the mesh; every claim point MUST refuse flagged cards until a CLEARED alert lifts the flag, and the revocation set MUST persist across restarts.
+
+FR-3.8: Every officer-issued ledger claim MUST be signed with a deterministic ECDSA-P256 key (RFC-6979) unique to the issuing device; HQ MUST verify the signature against the issuer's embedded public key and surface tampered blocks as SIG✗.
+
+FR-3.9: A terminal MAY adopt a locally unknown account for cross-device login by probing the mesh (0x08), reassembling the credential chunks announced by an adjacent device (0x07), and adopting the account only when the full password hash matches the typed password. ADMIN accounts MUST NOT be announced or adopted over the mesh.
+
 FR-4: Web Command HQ & Mesh Simulation (Judge Visualizer)
 
 FR-4.1: The Web target MUST render a top-level Command HQ dashboard displaying live aggregate mesh health, active SOS beacons, and supply allocation logs.
@@ -257,9 +263,15 @@ TYPE
 
 enum (uint8)
 
-0x01: SOS Beacon, 0x02: Relay Status, 0x03: Ledger Sync Request, 0x04: Identity, 0x05: Ledger Record.
+0x01: SOS Beacon, 0x02: Relay Status, 0x03: Ledger Sync Request, 0x04: Identity, 0x05: Ledger Record, 0x06: Revocation Alert, 0x07: Account Record, 0x08: Account Request.
 
-For types 0x04/0x05 the coordinate, triage and altitude bytes are reused as payload (no room in a 22-byte frame): identity carries the ≤12-char username across LAT/LON/ALT with role in TRIAGE and name length in FLAGS; ledger record packs citizen ID and officer ID (hex) into LAT/LON, epoch-seconds claim time into ALT, and the ration item index into TRIAGE.
+For types 0x04–0x07 the coordinate, triage and altitude bytes are reused as payload (no room in a 22-byte frame): identity carries the ≤12-char username across LAT/LON/ALT with role in TRIAGE and name length in FLAGS; ledger record packs citizen ID and officer ID (hex) into LAT/LON, epoch-seconds claim time into ALT, and the ration item index into TRIAGE.
+
+0x06 (Revocation Alert) — issued by officers/HQ when a citizen card is stolen or suspended; a reason code 2 (CLEARED) unflags it: citizen ID (bit-packed) in LAT, sha256(citizen-id) digest tag in LON, reason (0 stolen / 1 suspended / 2 cleared) in TRIAGE-severity, issuedAt epoch32 in ALT.
+
+0x07 (Account Record) — chunked credential for cross-device login: chunk index in TRIAGE-severity, total chunk count in ALT, and 11 bytes of payload across LAT/LON/ALT. A full credential is `[nameLen][username ≤12][role][sha256('gridzero:pw:<password>') 32B]` split into 5 chunks. A fresh device reassembles chunks from one sender and adopts the account if the hash matches the typed password; ADMIN is never announced.
+
+0x08 (Account Request) — coords-group frame (flags=0, no payload). Broadcast at the login screen to probe neighbouring terminals for their local accounts.
 
 Bytes 2–3
 

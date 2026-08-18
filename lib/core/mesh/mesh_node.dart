@@ -41,6 +41,9 @@ class MeshNodeState {
         return;
       case MeshPacketType.ledgerRecord:
       case MeshPacketType.ledgerSyncRequest:
+      case MeshPacketType.revocationAlert:
+      case MeshPacketType.accountRecord:
+      case MeshPacketType.accountRequest:
         return;
       case MeshPacketType.sosBeacon:
       case MeshPacketType.relayStatus:

@@ -156,6 +156,16 @@ class MeshController {
   /// Called when a peer (or a relayed request) asks for our unsynced records.
   void Function(int fromNodeId)? onLedgerSyncRequest;
 
+  /// Called with a stolen/suspended card alert diffused by an officer.
+  void Function(RevocationAlert alert, int fromNodeId)? onRevocation;
+
+  /// Called with one slice of a chunked account credential.
+  void Function(AccountChunk chunk, int fromNodeId)? onAccountChunk;
+
+  /// Called when a peer asks the mesh to announce its local accounts
+  /// (fresh-device login probe).
+  void Function(int fromNodeId)? onAccountRequest;
+
   Map<int, MeshNodeState> get nodes => Map.unmodifiable(_nodes);
 
   /// Number of frames seen so far (telemetry).
@@ -271,6 +281,60 @@ class MeshController {
     return adapter.broadcast(packet);
   }
 
+  /// Floods a stolen/suspended card alert so every terminal within range (and
+  /// one hop beyond) refuses future claims from that citizen.
+  Future<void> broadcastRevocation(
+    String citizenId, {
+    required int reasonCode,
+    int? issuedAt,
+  }) {
+    final packet = MeshPacket(
+      type: MeshPacketType.revocationAlert,
+      senderId: nodeId,
+      latitude: 0,
+      longitude: 0,
+      triage: TriageFlags(),
+      seq: (_seq = (_seq + 1) & 0xffff),
+      revocation: RevocationAlert(
+        citizenId: citizenId,
+        reasonCode: reasonCode,
+        issuedAt: issuedAt ?? DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      ),
+    );
+    _dedup.insert(packet.dedupKey);
+    return adapter.broadcast(packet);
+  }
+
+  /// Floods one account credential chunk set so a fresh device listening at
+  /// the login screen can reassemble and adopt the account.
+  Future<void> broadcastAccount(List<AccountChunk> chunks) async {
+    for (final c in chunks) {
+      final packet = MeshPacket(
+        type: MeshPacketType.accountRecord,
+        senderId: nodeId,
+        latitude: 0,
+        longitude: 0,
+        triage: TriageFlags(),
+        seq: (_seq = (_seq + 1) & 0xffff),
+        accountChunk: c,
+      );
+      _dedup.insert(packet.dedupKey);
+      await adapter.broadcast(packet);
+    }
+  }
+
+  /// Asks adjacent terminals to announce their local accounts (login probe).
+  Future<void> broadcastAccountRequest() {
+    final packet = _newPacket(
+      MeshPacketType.accountRequest,
+      triage: TriageFlags(),
+      latitude: 0,
+      longitude: 0,
+    );
+    _dedup.insert(packet.dedupKey);
+    return adapter.broadcast(packet);
+  }
+
   MeshPacket _newPacket(
     MeshPacketType type, {
     required TriageFlags triage,
@@ -324,9 +388,19 @@ class MeshController {
       onLedgerSyncRequest?.call(p.senderId);
     }
 
+    if (p.type == MeshPacketType.revocationAlert && p.revocation != null) {
+      onRevocation?.call(p.revocation!, p.senderId);
+    } else if (p.type == MeshPacketType.accountRecord &&
+        p.accountChunk != null) {
+      onAccountChunk?.call(p.accountChunk!, p.senderId);
+    } else if (p.type == MeshPacketType.accountRequest && !isOwn) {
+      onAccountRequest?.call(p.senderId);
+    }
+
     // FR-1.3: relay while TTL remains and the frame is not ours. Payload
-    // frames (identity / ledger record) must carry their payload along or
-    // the next hop's encode() null-checks crash on the missing field.
+    // frames (identity / ledger record / revocation / account chunk) must
+    // carry their payload along or the next hop's encode() null-checks crash
+    // on the missing field.
     if (p.ttl > 1 && p.senderId != nodeId) {
       final relay = MeshPacket(
         type: p.type,
@@ -342,6 +416,8 @@ class MeshController {
         identityUsername: p.identityUsername,
         identityRole: p.identityRole,
         syncRecord: p.syncRecord,
+        revocation: p.revocation,
+        accountChunk: p.accountChunk,
       );
       framesRelayed++;
       adapter.broadcast(relay);

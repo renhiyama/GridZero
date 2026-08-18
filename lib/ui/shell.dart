@@ -79,15 +79,38 @@ class _ModeShellState extends State<ModeShell> {
       body: Stack(
         children: [
           Positioned.fill(child: pages[_index]),
+          // Integrated nav: page content fades into the bar instead of
+          // stopping at a hard edge.
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            height: 86,
+            child: IgnorePointer(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      p.bg.withValues(alpha: 0),
+                      p.bg.withValues(alpha: 0.75),
+                      p.bg,
+                    ],
+                    stops: const [0, 0.45, 0.8],
+                  ),
+                ),
+              ),
+            ),
+          ),
           _SosAlertBanner(app: app),
         ],
       ),
+      extendBody: true,
       bottomNavigationBar: Container(
         decoration: BoxDecoration(
           border: Border(top: BorderSide(color: p.primaryDim)),
-          boxShadow: [
-            BoxShadow(color: p.primary.withValues(alpha: 0.14), blurRadius: 12),
-          ],
+          color: Colors.transparent,
         ),
         child: Padding(
           padding: EdgeInsets.only(
@@ -263,7 +286,9 @@ class _NavItem extends StatelessWidget {
       onTap: onTap,
       child: Container(
         height: 58,
-        color: selected ? p.primary.withValues(alpha: 0.10) : p.bg,
+        color: selected
+            ? p.primary.withValues(alpha: 0.10)
+            : Colors.transparent,
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [

@@ -1,0 +1,78 @@
+import 'package:aapadsetu/app_scope.dart';
+import 'package:aapadsetu/core/app_state.dart';
+import 'package:aapadsetu/core/mesh/mesh_adapter.dart';
+import 'package:aapadsetu/core/mesh/simulated_mesh.dart';
+import 'package:aapadsetu/ui/hud_theme.dart';
+import 'package:aapadsetu/ui/shell.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:qr_flutter/qr_flutter.dart';
+
+AppState makeState() {
+  AppState.nativeAdapterFactory =
+      (nodeId) => SimulatedMeshAdapter() as MeshAdapter;
+  return AppState();
+}
+
+Widget app(AppState state) => AppScope(
+      state: state,
+      child: MaterialApp(
+        theme: HudTheme.dark,
+        home: const ModeShell(),
+      ),
+    );
+
+Future<void> initState(WidgetTester tester, AppState state) =>
+    tester.runAsync(() => state.init());
+
+Future<void> teardown(WidgetTester tester, AppState state) async {
+  // Unmount widgets so their periodic timers are disposed, then drop state.
+  await tester.pumpWidget(const SizedBox());
+  state.dispose();
+}
+
+void main() {
+  testWidgets('citizen shell renders dynamic QR and mesh HUD', (tester) async {
+    final state = makeState();
+    await initState(tester, state);
+    await tester.pumpWidget(app(state));
+    await tester.pump();
+
+    expect(find.text('SOS BROADCAST'), findsOneWidget);
+    expect(find.textContaining('DYNAMIC RATION QR'), findsOneWidget);
+    expect(find.textContaining('CITIZEN ▸'), findsOneWidget);
+    expect(find.byType(QrImageView), findsOneWidget);
+
+    await teardown(tester, state);
+  });
+
+  testWidgets('officer mode gates on enlistment', (tester) async {
+    final state = makeState();
+    await initState(tester, state);
+    await tester.pumpWidget(app(state));
+    await tester.pump();
+
+    await tester.tap(find.text('OFFICER'));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('OFFICER ENLISTMENT'), findsOneWidget);
+
+    await teardown(tester, state);
+  });
+
+  testWidgets('HQ tab shows command dashboard telemetry', (tester) async {
+    final state = makeState();
+    await initState(tester, state);
+    await tester.pumpWidget(app(state));
+    await tester.pump();
+
+    await tester.tap(find.text('HQ'));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('COMMAND HQ'), findsOneWidget);
+    expect(find.textContaining('AGGREGATE MESH HEALTH'), findsOneWidget);
+    expect(find.textContaining('TRIAGE HEATMAP'), findsOneWidget);
+
+    await teardown(tester, state);
+  });
+}

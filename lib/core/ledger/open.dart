@@ -1,0 +1,31 @@
+/// Opens the best ledger backend for the current platform.
+///
+/// Web cannot host SQLite, so it falls back to the in-memory chain. Desktop
+/// and mobile use SQLite via FFI; if native sqlite is unavailable the app
+/// still degrades gracefully to memory rather than crashing.
+library;
+
+import 'package:flutter/foundation.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+
+import 'ledger_store.dart';
+import 'memory_ledger.dart';
+import 'sqlite_ledger.dart';
+
+Future<LedgerStore> openLedgerStore() async {
+  if (kIsWeb) {
+    return MemoryLedgerStore();
+  }
+  try {
+    sqfliteFfiInit();
+    final dir = await getApplicationSupportDirectory();
+    final store = await SqliteLedgerStore.open(
+      databaseFactoryFfi,
+      '${dir.path}/aapadsetu_ledger.db',
+    );
+    return store;
+  } catch (_) {
+    return MemoryLedgerStore();
+  }
+}

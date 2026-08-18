@@ -6,6 +6,7 @@ library;
 import 'package:flutter/material.dart';
 
 import '../app_scope.dart';
+import '../core/app_state.dart';
 import 'hud_theme.dart';
 
 const _seedSwatches = <(String, Color)>[
@@ -192,7 +193,8 @@ class SettingsScreen extends StatelessWidget {
                   child: ListenableBuilder(
                     listenable: app,
                     builder: (context, _) {
-                      final nodes = app.mesh.nodes.length;
+                      final mesh = app.mesh!;
+                      final nodes = mesh.nodes.length;
                       final ok = nodes > 0;
                       return Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -219,7 +221,7 @@ class SettingsScreen extends StatelessWidget {
                           ),
                           if (!ok) ...[
                             const SizedBox(height: 6),
-                            HduReadout('RADIO', app.mesh.adapter.status),
+                            HduReadout('RADIO', mesh.adapter.status),
                           ],
                           const SizedBox(height: 6),
                           HduReadout('NEARBY PEOPLE', '$nodes'),
@@ -246,6 +248,81 @@ class SettingsScreen extends StatelessWidget {
                 ),
                 const SizedBox(height: 12),
                 HudPanel(
+                  title: 'ACCOUNT',
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      HduReadout('USER', app.username),
+                      const SizedBox(height: 2),
+                      HduReadout('ROLE', app.role.name.toUpperCase()),
+                      const SizedBox(height: 10),
+                      FilledButton(
+                        onPressed: () => app.logout(),
+                        child: const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 10),
+                          child: Text(
+                            'LOG OUT',
+                            style: TextStyle(
+                              fontFamily: 'monospace',
+                              fontSize: 13,
+                              letterSpacing: 2,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+                HudPanel(
+                  title: 'DANGER ZONE',
+                  borderColor: p.error,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(
+                        'DELETE ALL DATA & LOG OUT',
+                        style: TextStyle(
+                          color: p.error,
+                          fontFamily: 'monospace',
+                          fontSize: 12,
+                          letterSpacing: 1,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'WIPES THE LEDGER, ALL ACCOUNTS AND '
+                        'PREFERENCES ON THIS DEVICE.',
+                        style: TextStyle(
+                          color: p.textDim,
+                          fontFamily: 'monospace',
+                          fontSize: 10,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      FilledButton(
+                        style: FilledButton.styleFrom(
+                          backgroundColor: p.error,
+                          foregroundColor: Colors.white,
+                        ),
+                        onPressed: () => _confirmDeleteAll(context, app),
+                        child: const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 10),
+                          child: Text(
+                            'DELETE ALL DATA & LOG OUT',
+                            style: TextStyle(
+                              fontFamily: 'monospace',
+                              fontSize: 13,
+                              letterSpacing: 1,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+                HudPanel(
                   title: 'ABOUT',
                   child: const HduReadout(
                     'AAPADSETU',
@@ -259,4 +336,42 @@ class SettingsScreen extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Destructive, so confirm before running. The whole point is to avoid a
+/// reinstall, which is exactly why a careless tap must not erase everything.
+Future<void> _confirmDeleteAll(BuildContext context, AppState app) async {
+  final p = AppPalette.of(context);
+  final confirmed = await showDialog<bool>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: const Text(
+        'ERASE ALL DATA?',
+        style: TextStyle(fontFamily: 'monospace'),
+      ),
+      content: const Text(
+        'This wipes the local ledger, every account and all '
+        'settings. It cannot be undone.',
+        style: TextStyle(fontFamily: 'monospace', fontSize: 12),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(false),
+          child: const Text(
+            'CANCEL',
+            style: TextStyle(fontFamily: 'monospace'),
+          ),
+        ),
+        FilledButton(
+          style: FilledButton.styleFrom(
+            backgroundColor: p.error,
+            foregroundColor: Colors.white,
+          ),
+          onPressed: () => Navigator.of(context).pop(true),
+          child: const Text('ERASE', style: TextStyle(fontFamily: 'monospace')),
+        ),
+      ],
+    ),
+  );
+  if (confirmed ?? false) await app.deleteAllData();
 }

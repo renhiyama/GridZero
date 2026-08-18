@@ -1,7 +1,7 @@
 /// SQLite hash-chain ledger backend (FR-3). Schema mirrors docs/REQ.md 2.2.
 library;
 
-import 'package:sqflite_common/sqflite.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'ledger_store.dart';
 
@@ -28,9 +28,10 @@ CREATE TABLE IF NOT EXISTS known_mesh_nodes (
 ''';
 
 class SqliteLedgerStore implements LedgerStore {
-  SqliteLedgerStore(this._db);
+  SqliteLedgerStore(this._db, this._path);
 
   final Database _db;
+  final String _path;
 
   static Future<LedgerStore> open(DatabaseFactory factory, String path) async {
     final db = await factory.openDatabase(
@@ -40,11 +41,17 @@ class SqliteLedgerStore implements LedgerStore {
         onCreate: (db, _) => db.execute(kLedgerSchema),
       ),
     );
-    return SqliteLedgerStore(db);
+    return SqliteLedgerStore(db, path);
   }
 
   @override
   Future<void> close() => _db.close();
+
+  @override
+  Future<void> wipe() async {
+    await _db.close();
+    await databaseFactoryFfi.deleteDatabase(_path);
+  }
 
   @override
   Future<String> lastHash() async {

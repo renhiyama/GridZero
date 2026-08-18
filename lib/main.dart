@@ -9,6 +9,7 @@ import 'core/mesh/native_mesh.dart';
 import 'core/mesh_packet.dart';
 import 'core/notifications.dart';
 import 'ui/hud_theme.dart';
+import 'ui/login_screen.dart';
 import 'ui/shell.dart';
 
 Future<void> main() async {
@@ -21,7 +22,15 @@ Future<void> main() async {
   await state.init();
 
   final notifier = SosNotifier(state);
-  await notifier.init();
+  // The mesh only exists after login, so notifications subscribe/unsubscribe
+  // as sessions start and stop.
+  state.addListener(() {
+    if (state.loggedIn && state.mesh != null) {
+      notifier.init();
+    } else if (!state.loggedIn) {
+      notifier.dispose();
+    }
+  });
 
   runApp(AapadSetuApp(state: state));
 }
@@ -54,7 +63,7 @@ class AapadSetuApp extends StatelessWidget {
                   brightness: Brightness.dark,
                 ),
                 themeMode: state.themeMode,
-                home: const ModeShell(),
+                home: state.loggedIn ? const ModeShell() : const LoginScreen(),
               );
             },
           ),

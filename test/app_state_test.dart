@@ -31,10 +31,11 @@ void main() {
   test('claim flow grants once then rejects duplicate (FR-3.4)', () async {
     final officer = makeState();
     await officer.init();
-    await officer.enlistOfficer(kSampleMasterKeyPayload);
+    await officer.register('OFF1', 'pass', Role.officer);
 
     final citizen = makeState();
     await citizen.init();
+    await citizen.register('CIT1', 'pass', Role.citizen);
     final payload = citizen.citizenQrPayload();
 
     final first = await officer.claimFromPayload(payload, 'Rice');
@@ -52,10 +53,11 @@ void main() {
   test('expired token is rejected before ledger append', () async {
     final officer = makeState();
     await officer.init();
-    await officer.enlistOfficer(kSampleMasterKeyPayload);
+    await officer.register('OFF2', 'pass', Role.officer);
 
     final citizen = makeState();
     await citizen.init();
+    await citizen.register('CIT2', 'pass', Role.citizen);
     // forged claim: expired window + bogus token
     final forged = jsonEncode({
       'v': 1,
@@ -80,19 +82,79 @@ void main() {
     app.dispose();
   });
 
-  test('citizen identity persists across restarts (stable peer id)', () async {
+  test('login gate: wrong password refused, ADMIN bypasses', () async {
+    final app = makeState();
+    await app.init();
+    expect(app.loggedIn, isFalse);
+
+    expect(await app.login('GHOST', 'pass'), isNotNull);
+    expect(app.loggedIn, isFalse);
+
+    await app.register('USER1', 'pass', Role.citizen);
+    expect(app.loggedIn, isTrue);
+    await app.logout();
+    expect(app.loggedIn, isFalse);
+
+    expect(await app.login('USER1', 'wrong'), isNotNull);
+    expect(app.loggedIn, isFalse);
+    expect(await app.login('USER1', 'pass'), isNull);
+    expect(app.loggedIn, isTrue);
+    expect(app.role, Role.citizen);
+    await app.logout();
+
+    expect(await app.login('ADMIN', 'anything'), isNull);
+    expect(app.loggedIn, isTrue);
+    expect(app.role, Role.admin);
+    app.dispose();
+  });
+
+  test('citizen identity is stable per account across logins', () async {
     final first = makeState();
     await first.init();
+    await first.register('SAME', 'pass', Role.citizen);
     final id1 = first.citizenId;
-    final node1 = first.mesh.nodeId;
-    first.dispose();
+    final node1 = first.mesh!.nodeId;
+    await first.logout();
 
-    // Re-open the app: same persisted identity, so peers never see a new
-    // node id for the same phone.
+    // Re-open the app and log in with the same account: same identity, so
+    // peers never see a new node id for the same phone.
     final second = makeState();
     await second.init();
+    expect(await second.login('SAME', 'pass'), isNull);
     expect(second.citizenId, id1);
-    expect(second.mesh.nodeId, node1);
+    expect(second.mesh!.nodeId, node1);
     second.dispose();
+  });
+
+  test('delete all data wipes ledger, accounts and identity', () async {
+    final app = makeState();
+    await app.init();
+    await app.register('USER2', 'pass', Role.officer);
+    await app.enlistOfficer(kSampleMasterKeyPayload);
+    expect(await app.ledger.recordsCount(), 0);
+
+    // A real claim lands a record before the wipe.
+    final citizen = makeState();
+    await citizen.init();
+    await citizen.register('CIT3', 'pass', Role.citizen);
+    final result = await app.claimFromPayload(
+      citizen.citizenQrPayload(),
+      'Rice',
+    );
+    expect(result.status, ClaimStatus.granted);
+    expect(await app.ledger.recordsCount(), 1);
+
+    await app.deleteAllData();
+    expect(app.loggedIn, isFalse);
+    expect(app.citizenId, isEmpty);
+    expect(await app.ledger.recordsCount(), 0);
+    expect(
+      await app.login('USER2', 'pass'),
+      isNotNull,
+      reason: 'account erased',
+    );
+
+    citizen.dispose();
+    app.dispose();
   });
 }

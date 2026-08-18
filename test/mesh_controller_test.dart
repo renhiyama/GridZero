@@ -194,58 +194,60 @@ void main() {
     await ctrl.stop();
   });
 
-  test('sosStarted/sosEnded fire once per transition, cleared frame turns off',
-      () async {
-    final adapter = FakeMeshAdapter();
-    final ctrl = MeshController(nodeId: 0x1111, adapter: adapter);
-    final started = <int>[];
-    final ended = <int>[];
-    ctrl.sosStarted.listen((n) => started.add(n.nodeId));
-    ctrl.sosEnded.listen((n) => ended.add(n.nodeId));
-    await ctrl.start();
+  test(
+    'sosStarted/sosEnded fire once per transition, cleared frame turns off',
+    () async {
+      final adapter = FakeMeshAdapter();
+      final ctrl = MeshController(nodeId: 0x1111, adapter: adapter);
+      final started = <int>[];
+      final ended = <int>[];
+      ctrl.sosStarted.listen((n) => started.add(n.nodeId));
+      ctrl.sosEnded.listen((n) => ended.add(n.nodeId));
+      await ctrl.start();
 
-    final sos = MeshPacket(
-      type: MeshPacketType.sosBeacon,
-      senderId: 0xA,
-      latitude: 20.35,
-      longitude: 85.82,
-      triage: TriageFlags(severity: 3),
-      seq: 1,
-    );
-    await adapter.injectRemote(sos);
-    await Future<void>.delayed(const Duration(milliseconds: 20));
-    expect(started, [0xA]);
-    expect(ctrl.nodes[0xA]!.hasSos, isTrue);
-
-    // Re-broadcast of the same episode must not re-alert.
-    await adapter.injectRemote(
-      MeshPacket(
+      final sos = MeshPacket(
         type: MeshPacketType.sosBeacon,
         senderId: 0xA,
         latitude: 20.35,
         longitude: 85.82,
         triage: TriageFlags(severity: 3),
-        seq: 2,
-      ),
-    );
-    await Future<void>.delayed(const Duration(milliseconds: 20));
-    expect(started, [0xA]);
+        seq: 1,
+      );
+      await adapter.injectRemote(sos);
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(started, [0xA]);
+      expect(ctrl.nodes[0xA]!.hasSos, isTrue);
 
-    // Cleared frame flips the receiver off and emits sosEnded.
-    await adapter.injectRemote(
-      MeshPacket(
-        type: MeshPacketType.sosBeacon,
-        senderId: 0xA,
-        latitude: 20.35,
-        longitude: 85.82,
-        triage: TriageFlags(severity: 3),
-        seq: 3,
-        flags: 1,
-      ),
-    );
-    await Future<void>.delayed(const Duration(milliseconds: 20));
-    expect(ctrl.nodes[0xA]!.hasSos, isFalse);
-    expect(ended, [0xA]);
-    await ctrl.stop();
-  });
+      // Re-broadcast of the same episode must not re-alert.
+      await adapter.injectRemote(
+        MeshPacket(
+          type: MeshPacketType.sosBeacon,
+          senderId: 0xA,
+          latitude: 20.35,
+          longitude: 85.82,
+          triage: TriageFlags(severity: 3),
+          seq: 2,
+        ),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(started, [0xA]);
+
+      // Cleared frame flips the receiver off and emits sosEnded.
+      await adapter.injectRemote(
+        MeshPacket(
+          type: MeshPacketType.sosBeacon,
+          senderId: 0xA,
+          latitude: 20.35,
+          longitude: 85.82,
+          triage: TriageFlags(severity: 3),
+          seq: 3,
+          flags: 1,
+        ),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(ctrl.nodes[0xA]!.hasSos, isFalse);
+      expect(ended, [0xA]);
+      await ctrl.stop();
+    },
+  );
 }

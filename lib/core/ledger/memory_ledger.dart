@@ -12,6 +12,12 @@ class MemoryLedgerStore implements LedgerStore {
   Future<void> close() async {}
 
   @override
+  Future<void> wipe() async {
+    _records.clear();
+    _nodes.clear();
+  }
+
+  @override
   Future<String> lastHash() async =>
       _records.isEmpty ? genesisHash : _records.last.currentHash;
 

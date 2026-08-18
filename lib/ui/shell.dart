@@ -45,25 +45,36 @@ class _ModeShellState extends State<ModeShell> {
     final target = _app!.navRequest.value;
     if (target == null) return;
     _app!.navRequest.value = null;
-    if (target != _index) setState(() => _index = target);
+    // openSos targets the HQ tab; on the admin shell HQ is the first tab.
+    final hqIndex = _app!.role == Role.admin ? 0 : 2;
+    final index = target == 2 ? hqIndex : target;
+    if (index != _index) setState(() => _index = index);
   }
 
   @override
   Widget build(BuildContext context) {
     final app = AppScope.of(context);
     final p = AppPalette.of(context);
-    final pages = [
-      const CitizenScreen(),
-      const OfficerScreen(),
-      const HqScreen(),
-      const SettingsScreen(),
-    ];
-    final items = <(String, IconData)>[
-      ('CITIZEN', Icons.person_outline),
-      ('OFFICER', Icons.shield_outlined),
-      ('HQ', Icons.monitor_heart_outlined),
-      ('SETTINGS', Icons.settings_outlined),
-    ];
+    final isAdmin = app.role == Role.admin;
+    final pages = isAdmin
+        ? const <Widget>[HqScreen(), SettingsScreen()]
+        : const <Widget>[
+            CitizenScreen(),
+            OfficerScreen(),
+            HqScreen(),
+            SettingsScreen(),
+          ];
+    final items = isAdmin
+        ? const <(String, IconData)>[
+            ('HQ', Icons.monitor_heart_outlined),
+            ('SETTINGS', Icons.settings_outlined),
+          ]
+        : const <(String, IconData)>[
+            ('CITIZEN', Icons.person_outline),
+            ('OFFICER', Icons.shield_outlined),
+            ('HQ', Icons.monitor_heart_outlined),
+            ('SETTINGS', Icons.settings_outlined),
+          ];
     return Scaffold(
       body: Stack(
         children: [
@@ -123,10 +134,13 @@ class _SosAlertBannerState extends State<_SosAlertBanner> {
   void initState() {
     super.initState();
     // A brand-new SOS re-alerts even if a previous one was dismissed.
-    _startedSub = widget.app.mesh.sosStarted
-        .listen((n) => setState(() => _dismissed.remove(n.nodeId)));
-    _endedSub = widget.app.mesh.sosEnded
-        .listen((n) => setState(() => _dismissed.remove(n.nodeId)));
+    final m = widget.app.mesh!;
+    _startedSub = m.sosStarted.listen(
+      (n) => setState(() => _dismissed.remove(n.nodeId)),
+    );
+    _endedSub = m.sosEnded.listen(
+      (n) => setState(() => _dismissed.remove(n.nodeId)),
+    );
   }
 
   @override
@@ -139,15 +153,16 @@ class _SosAlertBannerState extends State<_SosAlertBanner> {
   @override
   Widget build(BuildContext context) {
     final p = AppPalette.of(context);
-    final mesh = widget.app.mesh;
+    final mesh = widget.app.mesh!;
     return StreamBuilder<Map<int, MeshNodeState>>(
       stream: mesh.nodeUpdates,
       initialData: mesh.nodes,
       builder: (context, snap) {
-        final active = (snap.data?.values ?? <MeshNodeState>[])
-            .where((n) => n.hasSos && !_dismissed.contains(n.nodeId))
-            .toList()
-          ..sort((a, b) => b.severity.compareTo(a.severity));
+        final active =
+            (snap.data?.values ?? <MeshNodeState>[])
+                .where((n) => n.hasSos && !_dismissed.contains(n.nodeId))
+                .toList()
+              ..sort((a, b) => b.severity.compareTo(a.severity));
         final top = active.isEmpty ? null : active.first;
         return Positioned(
           top: 0,
@@ -185,11 +200,11 @@ class _SosAlertBannerState extends State<_SosAlertBanner> {
                               child: Text(
                                 active.length == 1
                                     ? 'SOS ACTIVE — NODE '
-                                        '${top.nodeId.toRadixString(16).toUpperCase()} · '
-                                        'TRIAGE ${top.severity} — TAP TO TRACK'
+                                          '${top.nodeId.toRadixString(16).toUpperCase()} · '
+                                          'TRIAGE ${top.severity} — TAP TO TRACK'
                                     : '${active.length} SOS ACTIVE — '
-                                        'TOP TRIAGE ${top.severity} — '
-                                        'TAP TO TRACK',
+                                          'TOP TRIAGE ${top.severity} — '
+                                          'TAP TO TRACK',
                                 style: const TextStyle(
                                   color: Colors.white,
                                   fontFamily: 'monospace',

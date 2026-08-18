@@ -22,12 +22,29 @@ import 'mesh/mesh_controller.dart';
 import 'mesh_packet.dart';
 import 'totp.dart';
 
-enum Role { citizen, officer }
+enum Role { citizen, officer, admin }
 
-/// Preferences key holding the citizen identity. Persisting it makes the
-/// mesh node id stable across app restarts, so peers dedupe to one node
-/// instead of spawning a fresh identity per launch.
-const String _kCitizenIdPref = 'citizen_id';
+/// Accounts are per-device and stored in shared_preferences as a JSON map of
+/// username -> {role, passwordHash}. Prototype cheat: the ADMIN login skips
+/// password verification entirely so the HQ laptop is always reachable.
+const String _kAccountsPref = 'accounts';
+
+class Account {
+  Account({required this.username, required this.role, required this.hash});
+
+  final String username;
+  final Role role;
+  final String hash;
+
+  Map<String, Object?> toJson() => {'role': role.name, 'hash': hash};
+
+  static Account fromJson(String username, Map<String, Object?> json) =>
+      Account(
+        username: username,
+        role: Role.values.byName(json['role'] as String),
+        hash: json['hash'] as String,
+      );
+}
 
 class AppState extends ChangeNotifier {
   Role _role = Role.citizen;
@@ -36,13 +53,17 @@ class AppState extends ChangeNotifier {
   String? _officerId;
   String? get officerId => _officerId;
 
+  bool loggedIn = false;
+  String _username = '';
+  String get username => _username;
+
   String _citizenId = '';
   String get citizenId => _citizenId;
   List<int> get citizenKey =>
       sha256.convert(utf8.encode('aapadsetu:citizen:$_citizenId')).bytes;
 
   late LedgerStore ledger;
-  late MeshController mesh;
+  MeshController? mesh;
 
   bool sosActive = false;
   TriageFlags sosFlags = TriageFlags(severity: 3);
@@ -86,28 +107,141 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<String> requestMeshPermissions() => mesh.adapter.ensurePermissions();
-
-  Future<void> init() async {
-    final prefs = await SharedPreferences.getInstance();
-    _citizenId = prefs.getString(_kCitizenIdPref) ?? _freshCitizenId();
-    await prefs.setString(_kCitizenIdPref, _citizenId);
-    ledger = await openLedgerStore();
-    mesh = _buildMesh();
-    await mesh.start();
-    // Announce immediately so peers learn of this node without waiting for
-    // the first 10s heartbeat; the BLE advertising payload starts empty.
-    mesh.announce();
-    _heartbeat = Timer.periodic(const Duration(seconds: 10), (_) {
-      mesh.announce();
-    });
-    initialized = true;
-    notifyListeners();
-    await _acquireGps();
+  Future<String> requestMeshPermissions() {
+    final m = mesh;
+    if (m == null) return Future.value('not logged in');
+    return m.adapter.ensurePermissions();
   }
 
-  static String _freshCitizenId() =>
-      'CIT-${sha256.convert(utf8.encode('${DateTime.now().microsecondsSinceEpoch}')).toString().substring(0, 8).toUpperCase()}';
+  /// Loads persistence only. The mesh transport is brought up by [login] so
+  /// nobody advertises before they identify themselves.
+  Future<void> init() async {
+    ledger = await openLedgerStore();
+    initialized = true;
+    notifyListeners();
+  }
+
+  static String _hashPassword(String password) =>
+      sha256.convert(utf8.encode('aapadsetu:pw:$password')).toString();
+
+  /// Deterministic per-account identity: stable across logins so peers never
+  /// see this device as a new node, and identical on this phone after a
+  /// "Delete All Data & Logout" + re-register with the same username.
+  String _seed() => 'aapadsetu:mesh:$username';
+
+  static String _freshCitizenId(String seed) =>
+      'CIT-${sha256.convert(utf8.encode(seed)).toString().substring(0, 8).toUpperCase()}';
+
+  /// Login gate. ADMIN bypasses password (prototype HQ). Other users must
+  /// exist and match their stored password hash.
+  Future<String?> login(String username, String password) async {
+    final name = username.trim().toUpperCase();
+    if (name.isEmpty) return 'enter a username';
+    if (name == 'ADMIN') {
+      return _startSession(username: 'ADMIN', role: Role.admin);
+    }
+    final prefs = await SharedPreferences.getInstance();
+    final accounts = _readAccounts(prefs);
+    final account = accounts[name];
+    if (account == null) return 'no account for $name — register first';
+    if (account.hash != _hashPassword(password)) return 'wrong password';
+    return _startSession(username: name, role: account.role);
+  }
+
+  /// Creates a local account then logs it in.
+  Future<String?> register(String username, String password, Role role) async {
+    final name = username.trim().toUpperCase();
+    if (name.isEmpty) return 'enter a username';
+    if (name == 'ADMIN') return 'ADMIN is reserved for HQ';
+    if (password.length < 4) return 'password must be 4+ characters';
+    final prefs = await SharedPreferences.getInstance();
+    final accounts = _readAccounts(prefs);
+    if (accounts.containsKey(name)) return 'account $name already exists';
+    accounts[name] = Account(
+      username: name,
+      role: role,
+      hash: _hashPassword(password),
+    );
+    await _writeAccounts(prefs, accounts);
+    return _startSession(username: name, role: role);
+  }
+
+  static Map<String, Account> _readAccounts(SharedPreferences prefs) {
+    final raw = prefs.getString(_kAccountsPref);
+    if (raw == null) return {};
+    try {
+      final decoded = jsonDecode(raw) as Map<String, dynamic>;
+      return decoded.map(
+        (name, json) => MapEntry(
+          name,
+          Account.fromJson(name, json as Map<String, Object?>),
+        ),
+      );
+    } catch (_) {
+      return {};
+    }
+  }
+
+  static Future<void> _writeAccounts(
+    SharedPreferences prefs,
+    Map<String, Account> accounts,
+  ) => prefs.setString(
+    _kAccountsPref,
+    jsonEncode(accounts.map((n, a) => MapEntry(n, a.toJson()))),
+  );
+
+  Future<String?> _startSession({
+    required String username,
+    required Role role,
+  }) async {
+    if (mesh != null) await logout();
+    _username = username;
+    _role = role;
+    _citizenId = _freshCitizenId(_seed());
+    mesh = _buildMesh(_seed());
+    final m = mesh!;
+    await m.start();
+    m.announce();
+    _heartbeat = Timer.periodic(const Duration(seconds: 10), (_) {
+      mesh?.announce();
+    });
+    loggedIn = true;
+    notifyListeners();
+    await _acquireGps();
+    return null;
+  }
+
+  /// Stops the radio and returns to the login screen. Identity and ledger
+  /// stay intact — use [deleteAllData] to erase everything.
+  Future<void> logout() async {
+    _heartbeat?.cancel();
+    _heartbeat = null;
+    _sosTimer?.cancel();
+    _sosTimer = null;
+    sosActive = false;
+    final m = mesh;
+    mesh = null;
+    if (m != null) {
+      await m.stop();
+    }
+    loggedIn = false;
+    _username = '';
+    _role = Role.citizen;
+    _citizenId = '';
+    _officerId = null;
+    notifyListeners();
+  }
+
+  /// Destructive factory reset: wipes the ledger, clears every preference
+  /// (accounts, appearance) and logs out. Back to a pristine first-run.
+  Future<void> deleteAllData() async {
+    await logout();
+    await ledger.wipe();
+    ledger = await openLedgerStore();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.clear();
+    notifyListeners();
+  }
 
   /// Real GPS lives on phones; laptops have none. Failure is normal —
   /// the app then falls back to the peer-consensus estimate.
@@ -132,7 +266,7 @@ class AppState extends ChangeNotifier {
           timeLimit: Duration(seconds: 10),
         ),
       );
-      mesh.setGpsFix(
+      mesh?.setGpsFix(
         latitude: pos.latitude,
         longitude: pos.longitude,
         altitude: pos.altitude,
@@ -146,11 +280,9 @@ class AppState extends ChangeNotifier {
   Timer? _heartbeat;
   Timer? _sosTimer;
 
-  MeshController _buildMesh() {
-    final nodeId =
-        (sha256.convert(utf8.encode(citizenId)).bytes[0] << 8 |
-            sha256.convert(utf8.encode(citizenId)).bytes[1]) &
-        0xffff;
+  MeshController _buildMesh(String seed) {
+    final digest = sha256.convert(utf8.encode(seed)).bytes;
+    final nodeId = (digest[0] << 8 | digest[1]) & 0xffff;
     final adapter = switch (defaultTargetPlatform) {
       TargetPlatform.linux => BluezMeshAdapter(
         advertisingPayload: Uint8List(meshPacketLength),
@@ -184,14 +316,16 @@ class AppState extends ChangeNotifier {
   void setSosActive(bool active) {
     sosActive = active;
     _sosTimer?.cancel();
+    final m = mesh;
+    if (m == null) return;
     if (active) {
-      mesh.broadcastSos(triage: sosFlags);
+      m.broadcastSos(triage: sosFlags);
       _sosTimer = Timer.periodic(const Duration(seconds: 30), (_) {
-        mesh.broadcastSos(triage: sosFlags);
+        m.broadcastSos(triage: sosFlags);
       });
     } else {
       // One cleared beacon so peers turn the alarm off now, not in 90s.
-      mesh.broadcastSos(triage: sosFlags, cleared: true);
+      m.broadcastSos(triage: sosFlags, cleared: true);
     }
     notifyListeners();
   }
@@ -262,20 +396,23 @@ class AppState extends ChangeNotifier {
     if (result.ok) {
       claimCount++;
       _claimSeq++;
-      mesh.broadcast(_buildLedgerPacket());
+      mesh?.broadcast(_buildLedgerPacket());
     }
     notifyListeners();
     return result;
   }
 
-  MeshPacket _buildLedgerPacket() => MeshPacket(
-    type: MeshPacketType.ledgerSyncRequest,
-    senderId: mesh.nodeId,
-    latitude: mesh.gpsFix ? mesh.gpsLatitude! : 0,
-    longitude: mesh.gpsFix ? mesh.gpsLongitude! : 0,
-    triage: TriageFlags(),
-    seq: _claimSeq & 0xffff,
-  );
+  MeshPacket _buildLedgerPacket() {
+    final m = mesh!;
+    return MeshPacket(
+      type: MeshPacketType.ledgerSyncRequest,
+      senderId: m.nodeId,
+      latitude: m.gpsFix ? m.gpsLatitude! : 0,
+      longitude: m.gpsFix ? m.gpsLongitude! : 0,
+      triage: TriageFlags(),
+      seq: _claimSeq & 0xffff,
+    );
+  }
 
   Map<String, Object?>? _decodeClaimPayload(String payload) {
     try {
@@ -309,7 +446,7 @@ class AppState extends ChangeNotifier {
   void dispose() {
     _heartbeat?.cancel();
     _sosTimer?.cancel();
-    mesh.stop();
+    mesh?.stop();
     ledger.close();
     super.dispose();
   }

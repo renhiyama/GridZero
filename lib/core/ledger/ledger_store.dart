@@ -93,6 +93,9 @@ abstract class LedgerStore {
   /// UTC day (FR-3.4) and any hash-chain break.
   Future<ClaimResult> append(LedgerRecord record);
 
+  /// Destructive: discards every stored record. Used by "Delete All Data".
+  Future<void> wipe();
+
   Future<void> upsertNode({
     required int nodeId,
     double? latitude,

@@ -2,6 +2,7 @@ import 'package:aapadsetu/app_scope.dart';
 import 'package:aapadsetu/core/app_state.dart';
 import 'package:aapadsetu/core/master_key.dart';
 import 'package:aapadsetu/ui/hud_theme.dart';
+import 'package:aapadsetu/ui/login_screen.dart';
 import 'package:aapadsetu/ui/shell.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -20,8 +21,17 @@ Widget app(AppState state) => AppScope(
   child: MaterialApp(theme: HudTheme.dark, home: const ModeShell()),
 );
 
+Widget loginApp(AppState state) => AppScope(
+  state: state,
+  child: MaterialApp(theme: HudTheme.dark, home: const LoginScreen()),
+);
+
 Future<void> initState(WidgetTester tester, AppState state) =>
-    tester.runAsync(() => state.init());
+    tester.runAsync(() async {
+      await state.init();
+      // The shell only exists after a session; log in as a citizen.
+      await state.register('TESTUSER', 'pass', Role.citizen);
+    });
 
 Future<void> teardown(WidgetTester tester, AppState state) async {
   // Unmount widgets so their periodic timers are disposed, then drop state.
@@ -136,6 +146,48 @@ void main() {
     expect(find.text('ACCENT COLOR'), findsOneWidget);
     expect(find.byTooltip('GREEN (FF00FF9C)'), findsOneWidget);
     expect(find.byTooltip('AMBER (FFFFB300)'), findsOneWidget);
+
+    await teardown(tester, state);
+  });
+
+  testWidgets('login screen gates the shell', (tester) async {
+    final state = makeState();
+    await tester.runAsync(() => state.init());
+    await tester.pumpWidget(loginApp(state));
+    await tester.pump();
+
+    expect(state.loggedIn, isFalse);
+    expect(find.text('LOGIN'), findsOneWidget);
+    expect(find.textContaining('USERNAME ADMIN'), findsOneWidget);
+
+    await tester.enterText(find.byType(TextField).first, 'ADMIN');
+    await tester.enterText(find.byType(TextField).last, 'anything');
+    await tester.tap(find.text('LOG IN'));
+    await tester.pump();
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 20)),
+    );
+    await tester.pump();
+
+    expect(state.loggedIn, isTrue);
+
+    await teardown(tester, state);
+  });
+
+  testWidgets('admin shell shows HQ + settings only', (tester) async {
+    final state = makeState();
+    await tester.runAsync(() async {
+      await state.init();
+      await state.login('ADMIN', '');
+    });
+    await tester.pumpWidget(app(state));
+    await tester.pump();
+
+    expect(state.role, Role.admin);
+    expect(find.text('HQ'), findsWidgets);
+    expect(find.text('SETTINGS'), findsWidgets);
+    expect(find.text('CITIZEN'), findsNothing);
+    expect(find.text('OFFICER'), findsNothing);
 
     await teardown(tester, state);
   });

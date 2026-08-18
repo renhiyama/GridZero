@@ -94,7 +94,7 @@ class _HqScreenState extends State<HqScreen> {
                 final fieldMap = _FieldMapPanel(app: app);
                 final enlistQr = _EnlistmentPanel();
                 final heatmap = _HeatmapPanel(
-                  nodes: app.mesh.nodes.values.toList(),
+                  nodes: app.mesh!.nodes.values.toList(),
                   palette: AppPalette.of(context),
                 );
                 final logs = _LogsPanel(app: app);
@@ -208,7 +208,10 @@ class _FieldMapPanel extends StatelessWidget {
     }
     return HudPanel(
       title: 'FIELD MAP',
-      child: SizedBox(height: 320, child: MeshMap(mesh: m, focus: focus)),
+      child: SizedBox(
+        height: 320,
+        child: MeshMap(mesh: m, focus: focus),
+      ),
     );
   }
 }

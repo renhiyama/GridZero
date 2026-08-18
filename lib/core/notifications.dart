@@ -26,6 +26,9 @@ class SosNotifier {
 
   Future<void> init() async {
     if (!kIsWeb && defaultTargetPlatform != TargetPlatform.android) return;
+    await _startSub?.cancel();
+    await _endSub?.cancel();
+    _active.clear();
     await _plugin.initialize(
       settings: const InitializationSettings(
         android: AndroidInitializationSettings('@mipmap/ic_launcher'),
@@ -34,10 +37,13 @@ class SosNotifier {
     );
     await _plugin
         .resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin>()
+          AndroidFlutterLocalNotificationsPlugin
+        >()
         ?.requestNotificationsPermission();
-    _startSub = state.mesh.sosStarted.listen(_onStarted);
-    _endSub = state.mesh.sosEnded.listen(_onEnded);
+    final m = state.mesh;
+    if (m == null) return;
+    _startSub = m.sosStarted.listen(_onStarted);
+    _endSub = m.sosEnded.listen(_onEnded);
   }
 
   Future<void> dispose() async {
@@ -50,7 +56,8 @@ class SosNotifier {
     _plugin.show(
       id: node.nodeId,
       title: 'SOS ALERT',
-      body: 'Node ${node.nodeId.toRadixString(16).toUpperCase()} · '
+      body:
+          'Node ${node.nodeId.toRadixString(16).toUpperCase()} · '
           'triage ${node.severity}',
       notificationDetails: const NotificationDetails(
         android: AndroidNotificationDetails(

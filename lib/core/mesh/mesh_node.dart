@@ -38,8 +38,7 @@ class MeshNodeState {
         clearSos();
       } else {
         hasSos = true;
-        sosExpiryEpoch =
-            DateTime.now().millisecondsSinceEpoch + _sosLeaseMs;
+        sosExpiryEpoch = DateTime.now().millisecondsSinceEpoch + _sosLeaseMs;
       }
     }
   }

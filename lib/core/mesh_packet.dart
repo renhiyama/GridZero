@@ -148,11 +148,7 @@ class MeshPacket {
     out.buffer.asByteData().setUint16(14, seq, Endian.big);
     out[16] = crc8(out.sublist(0, 16));
     out[17] = flags;
-    out.buffer.asByteData().setInt32(
-      18,
-      altitudeCm ?? _altUnknown,
-      Endian.big,
-    );
+    out.buffer.asByteData().setInt32(18, altitudeCm ?? _altUnknown, Endian.big);
     return out;
   }
 

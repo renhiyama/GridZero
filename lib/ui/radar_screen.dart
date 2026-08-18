@@ -65,7 +65,7 @@ class _RadarScreenState extends State<RadarScreen>
     return ListenableBuilder(
       listenable: app,
       builder: (context, _) {
-        final mesh = app.mesh;
+        final mesh = app.mesh!;
         final node = mesh.nodes[widget.nodeId];
         if (node == null) {
           return _targetLost(p);
@@ -220,21 +220,17 @@ class _RadarScreenState extends State<RadarScreen>
   }
 
   Widget _chip(AppPalette p, String label) => Container(
-        margin: const EdgeInsets.symmetric(horizontal: 4),
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-        decoration: BoxDecoration(
-          border: Border.all(color: p.primaryDim),
-          borderRadius: BorderRadius.circular(4),
-        ),
-        child: Text(
-          label,
-          style: TextStyle(
-            color: p.textDim,
-            fontFamily: 'monospace',
-            fontSize: 11,
-          ),
-        ),
-      );
+    margin: const EdgeInsets.symmetric(horizontal: 4),
+    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+    decoration: BoxDecoration(
+      border: Border.all(color: p.primaryDim),
+      borderRadius: BorderRadius.circular(4),
+    ),
+    child: Text(
+      label,
+      style: TextStyle(color: p.textDim, fontFamily: 'monospace', fontSize: 11),
+    ),
+  );
 
   Widget _hint(AppPalette p, _TrackTarget t) {
     final turn = t.turnDeg(_heading);
@@ -257,8 +253,12 @@ class _RadarScreenState extends State<RadarScreen>
     );
   }
 
-  Widget _actions(AppPalette p, AppState app, MeshController mesh,
-      MeshNodeState node) {
+  Widget _actions(
+    AppPalette p,
+    AppState app,
+    MeshController mesh,
+    MeshNodeState node,
+  ) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(24, 16, 24, 16),
       child: Column(
@@ -306,7 +306,8 @@ class _TrackTarget {
   final MeshNodeState node;
 
   bool get hasOwnGps => mesh.gpsFix;
-  bool get _targetGps => MeshController.validCoord(node.latitude, node.longitude);
+  bool get _targetGps =>
+      MeshController.validCoord(node.latitude, node.longitude);
 
   bool get hasBearing => hasOwnGps && _targetGps;
 
@@ -318,10 +319,9 @@ class _TrackTarget {
     final aLon = mesh.gpsLongitude!;
     final dLon = (node.longitude - aLon) * pi / 180;
     final y = sin(dLon) * cos(node.latitude * pi / 180);
-    final x = cos(aLat * pi / 180) * sin(node.latitude * pi / 180) -
-        sin(aLat * pi / 180) *
-            cos(node.latitude * pi / 180) *
-            cos(dLon);
+    final x =
+        cos(aLat * pi / 180) * sin(node.latitude * pi / 180) -
+        sin(aLat * pi / 180) * cos(node.latitude * pi / 180) * cos(dLon);
     return (atan2(y, x) * 180 / pi + 360) % 360;
   }
 
@@ -339,7 +339,8 @@ class _TrackTarget {
   /// so the radio estimate wins), otherwise an RSSI estimate.
   double? get distanceM {
     if (hasBearing) {
-      final gpsD = MeshController.kmBetween(
+      final gpsD =
+          MeshController.kmBetween(
             mesh.gpsLatitude!,
             mesh.gpsLongitude!,
             node.latitude,
@@ -446,9 +447,7 @@ class _RadarPainter extends CustomPainter {
           ..style = PaintingStyle.stroke,
       );
     }
-    final tp = TextPainter(
-      textDirection: TextDirection.ltr,
-    );
+    final tp = TextPainter(textDirection: TextDirection.ltr);
     for (final (label, angle) in const [
       ('N', 0.0),
       ('E', pi / 2),
@@ -463,10 +462,7 @@ class _RadarPainter extends CustomPainter {
       tp.paint(
         canvas,
         center +
-            Offset(
-              (radius + 14) * sin(angle),
-              -(radius + 14) * cos(angle),
-            ) -
+            Offset((radius + 14) * sin(angle), -(radius + 14) * cos(angle)) -
             Offset(tp.width / 2, tp.height / 2),
       );
     }

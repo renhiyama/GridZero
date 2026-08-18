@@ -18,6 +18,7 @@ import 'master_key.dart';
 import 'mesh/mesh_adapter.dart';
 import 'mesh/mesh_controller.dart';
 import 'mesh/simulated_mesh.dart';
+import 'mesh/simulator.dart';
 import 'mesh_packet.dart';
 import 'totp.dart';
 
@@ -81,9 +82,23 @@ class AppState extends ChangeNotifier {
     _heartbeat = Timer.periodic(const Duration(seconds: 10), (_) {
       mesh.announce();
     });
+    _startVirtualNetworkIfDesktop();
     initialized = true;
     notifyListeners();
     await _acquireGps();
+  }
+
+  /// Desktop has no BLE radio, so it runs a small virtual network so the
+  /// maps / links actually show live traffic. Phones use real BLE only.
+  MeshSimulator? _virtualNetwork;
+  bool get virtualNetworkActive => _virtualNetwork != null;
+
+  void _startVirtualNetworkIfDesktop() {
+    if (defaultTargetPlatform == TargetPlatform.android ||
+        defaultTargetPlatform == TargetPlatform.iOS) {
+      return;
+    }
+    _virtualNetwork = MeshSimulator(mesh.adapter, nodeCount: 10)..start();
   }
 
   /// Real GPS lives on phones; laptops/web have none. Failure is normal —
@@ -283,6 +298,7 @@ class AppState extends ChangeNotifier {
 
   @override
   void dispose() {
+    _virtualNetwork?.stop();
     _heartbeat?.cancel();
     _sosTimer?.cancel();
     mesh.stop();

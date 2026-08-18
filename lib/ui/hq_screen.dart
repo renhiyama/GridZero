@@ -1,16 +1,19 @@
 /// Persona C: Disaster Command HQ (FEAT-DASH-01 / FR-4). Live aggregate mesh
-/// telemetry, triage heatmap, supply logs and the P2P mesh simulator.
+/// telemetry, field map, triage heatmap, supply logs and the air-gapped
+/// enlistment QR that signs officers into the mesh.
 library;
 
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 
 import '../app_scope.dart';
 import '../core/ledger/ledger_store.dart';
+import '../core/master_key.dart';
 import '../core/mesh/mesh_node.dart';
-import '../core/mesh/simulator.dart';
 import 'hud_theme.dart';
+import 'mesh_map.dart';
 
 class HqScreen extends StatefulWidget {
   const HqScreen({super.key});
@@ -20,8 +23,6 @@ class HqScreen extends StatefulWidget {
 }
 
 class _HqScreenState extends State<HqScreen> {
-  MeshSimulator? _sim;
-  int _nodeCount = 35;
   Timer? _refresh;
 
   @override
@@ -35,7 +36,6 @@ class _HqScreenState extends State<HqScreen> {
   @override
   void dispose() {
     _refresh?.cancel();
-    _sim?.stop();
     super.dispose();
   }
 
@@ -43,7 +43,6 @@ class _HqScreenState extends State<HqScreen> {
   Widget build(BuildContext context) {
     final app = AppScope.of(context);
     final p = AppPalette.of(context);
-    final simActive = _sim != null && _sim!.adapter == app.mesh.adapter;
 
     return SafeArea(
       child: Column(
@@ -74,7 +73,9 @@ class _HqScreenState extends State<HqScreen> {
                     color: p.primary.withValues(alpha: 0.12),
                   ),
                   child: Text(
-                    simActive ? 'SIMULATION ACTIVE' : 'LIVE MESH',
+                    app.virtualNetworkActive
+                        ? 'VIRTUAL TEST NETWORK'
+                        : 'LIVE MESH',
                     style: TextStyle(
                       color: p.primary,
                       fontFamily: 'monospace',
@@ -91,10 +92,8 @@ class _HqScreenState extends State<HqScreen> {
               builder: (context, constraints) {
                 final wide = constraints.maxWidth > 900;
                 final telemetry = _TelemetryPanel(app: app);
-                final simulatorPanel = _SimulatorPanel(
-                  app: app,
-                  simActive: simActive,
-                );
+                final fieldMap = _FieldMapPanel(app: app);
+                final enlistQr = _EnlistmentPanel();
                 final heatmap = _HeatmapPanel(
                   nodes: app.mesh.nodes.values.toList(),
                   palette: AppPalette.of(context),
@@ -111,6 +110,8 @@ class _HqScreenState extends State<HqScreen> {
                           children: [
                             telemetry,
                             const SizedBox(height: 12),
+                            fieldMap,
+                            const SizedBox(height: 12),
                             heatmap,
                           ],
                         ),
@@ -119,7 +120,7 @@ class _HqScreenState extends State<HqScreen> {
                         child: ListView(
                           padding: const EdgeInsets.all(12),
                           children: [
-                            simulatorPanel,
+                            enlistQr,
                             const SizedBox(height: 12),
                             logs,
                           ],
@@ -133,7 +134,9 @@ class _HqScreenState extends State<HqScreen> {
                   children: [
                     telemetry,
                     const SizedBox(height: 12),
-                    simulatorPanel,
+                    enlistQr,
+                    const SizedBox(height: 12),
+                    fieldMap,
                     const SizedBox(height: 12),
                     heatmap,
                     const SizedBox(height: 12),
@@ -187,96 +190,46 @@ class _TelemetryPanel extends StatelessWidget {
   }
 }
 
-class _SimulatorPanel extends StatefulWidget {
-  const _SimulatorPanel({required this.app, required this.simActive});
+/// Live map of the field (same view as an officer's MAP tab).
+class _FieldMapPanel extends StatelessWidget {
+  const _FieldMapPanel({required this.app});
 
   final dynamic app;
-  final bool simActive;
 
-  @override
-  State<_SimulatorPanel> createState() => _SimulatorPanelState();
-}
-
-class _SimulatorPanelState extends State<_SimulatorPanel> {
   @override
   Widget build(BuildContext context) {
-    final p = AppPalette.of(context);
-    final app = widget.app;
-    final hq = context.findAncestorStateOfType<_HqScreenState>()!;
     return HudPanel(
-      title: 'P2P MESH SIMULATOR / FR-4.2',
+      title: 'FIELD MAP',
+      child: SizedBox(height: 320, child: MeshMap(mesh: app.mesh)),
+    );
+  }
+}
+
+/// Air-gapped handoff: an officer scans this QR to enlist (FR-2.3).
+class _EnlistmentPanel extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return HudPanel(
+      title: 'ENLISTMENT QR',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Row(
-            children: [
-              Text(
-                'NODES',
-                style: TextStyle(color: p.textDim, fontFamily: 'monospace'),
+          Center(
+            child: Container(
+              padding: const EdgeInsets.all(8),
+              color: Colors.white,
+              child: QrImageView(
+                data: kSampleMasterKeyPayload,
+                version: QrVersions.auto,
+                size: 150,
+                backgroundColor: Colors.white,
               ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Slider(
-                  value: hq._nodeCount.toDouble(),
-                  min: 20,
-                  max: 50,
-                  divisions: 30,
-                  activeColor: p.primary,
-                  label: '${hq._nodeCount}',
-                  onChanged: (v) => setState(() => hq._nodeCount = v.round()),
-                ),
-              ),
-              Text(
-                '${hq._nodeCount}',
-                style: TextStyle(color: p.primary, fontFamily: 'monospace'),
-              ),
-            ],
-          ),
-          Row(
-            children: [
-              Expanded(
-                child: FilledButton(
-                  onPressed: widget.simActive
-                      ? () {
-                          hq._sim?.stop();
-                          hq._sim = null;
-                          setState(() {});
-                        }
-                      : () {
-                          if (!app.mesh.adapter.isSimulated) {
-                            app.setUseSimulator(true).then((_) {
-                              hq._sim = MeshSimulator(
-                                app.mesh.adapter,
-                                nodeCount: hq._nodeCount,
-                              )..start();
-                              setState(() {});
-                            });
-                          } else {
-                            hq._sim = MeshSimulator(
-                              app.mesh.adapter,
-                              nodeCount: hq._nodeCount,
-                            )..start();
-                            setState(() {});
-                          }
-                        },
-                  child: Text(
-                    widget.simActive ? '■ STOP SIMULATION' : '► RUN SIMULATION',
-                    style: const TextStyle(
-                      fontFamily: 'monospace',
-                      letterSpacing: 1,
-                    ),
-                  ),
-                ),
-              ),
-            ],
+            ),
           ),
           const SizedBox(height: 8),
-          HduReadout(
-            'MODE',
-            app.mesh.adapter.isSimulated
-                ? 'SIMULATED TRANSPORT'
-                : 'NATIVE BLE (simulator needs simulated transport)',
-            color: app.mesh.adapter.isSimulated ? p.primary : p.secondary,
+          const HduReadout(
+            'HOW',
+            'Officer app ▸ OFFICER ▸ SCAN MASTER KEY QR pointed at this code.',
           ),
         ],
       ),

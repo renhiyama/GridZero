@@ -6,18 +6,14 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_map/flutter_map.dart';
-import 'package:latlong2/latlong.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../app_scope.dart';
 import '../core/app_state.dart';
 import '../core/ledger/ledger_store.dart';
-import '../core/master_key.dart';
-import '../core/mesh/mesh_controller.dart';
-import '../core/mesh/mesh_node.dart';
 import 'hud_theme.dart';
+import 'mesh_map.dart';
 
 class OfficerScreen extends StatefulWidget {
   const OfficerScreen({super.key});
@@ -135,39 +131,22 @@ class _EnlistGate extends StatelessWidget {
             children: [
               const HduReadout(
                 'REQ',
-                'Scan Master Key QR signed by HQ. No internet required.',
+                'Scan the ENLISTMENT QR on the Command HQ tab. No internet.',
               ),
               const SizedBox(height: 12),
               if (cameraUsable) ...[
                 _EnlistScanButton(app: app),
                 const SizedBox(height: 12),
-              ],
-              const HduReadout('MANUAL ENTRY', 'Paste signed payload below'),
-              const SizedBox(height: 6),
-              _EnlistManualField(app: app),
-              const SizedBox(height: 12),
-              FilledButton(
-                onPressed: () async {
-                  final check = await app.enlistOfficer(
-                    kSampleMasterKeyPayload,
-                  );
-                  if (!context.mounted) return;
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      backgroundColor: check.ok ? p.primary : p.error,
-                      content: Text(
-                        check.ok
-                            ? 'OFFICER ENLISTED: ${check.masterKey!.officerId}'
-                            : check.message,
-                      ),
-                    ),
-                  );
-                },
-                child: const Text(
-                  'USE DEMO MASTER KEY',
-                  style: TextStyle(fontFamily: 'monospace', letterSpacing: 1),
+                HduReadout(
+                  'NOTE',
+                  'Open HQ ▸ ENLISTMENT QR on the signing device and point '
+                      'this camera at it.',
+                  color: p.textDim,
                 ),
-              ),
+              ] else
+                HudAlertBar(
+                  'NO CAMERA ON THIS DEVICE — RUN OFFICER MODE ON A PHONE',
+                ),
             ],
           ),
         ),
@@ -206,58 +185,6 @@ class _EnlistScanButton extends StatelessWidget {
         'SCAN MASTER KEY QR',
         style: TextStyle(fontFamily: 'monospace'),
       ),
-    );
-  }
-}
-
-class _EnlistManualField extends StatefulWidget {
-  const _EnlistManualField({required this.app});
-
-  final dynamic app;
-
-  @override
-  State<_EnlistManualField> createState() => _EnlistManualFieldState();
-}
-
-class _EnlistManualFieldState extends State<_EnlistManualField> {
-  final _ctrl = TextEditingController();
-
-  @override
-  void dispose() {
-    _ctrl.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final p = AppPalette.of(context);
-    return Row(
-      children: [
-        Expanded(
-          child: TextField(
-            controller: _ctrl,
-            style: const TextStyle(fontFamily: 'monospace', fontSize: 11),
-            decoration: const InputDecoration(hintText: '{"v":1,...}'),
-          ),
-        ),
-        const SizedBox(width: 8),
-        FilledButton(
-          onPressed: () async {
-            if (_ctrl.text.trim().isEmpty) return;
-            final check = await widget.app.enlistOfficer(_ctrl.text.trim());
-            if (!context.mounted) return;
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                backgroundColor: check.ok ? p.primary : p.error,
-                content: Text(
-                  check.message.isEmpty ? 'OFFICER ENLISTED' : check.message,
-                ),
-              ),
-            );
-          },
-          child: const Text('ENLIST'),
-        ),
-      ],
     );
   }
 }
@@ -492,206 +419,11 @@ class _LedgerTab extends StatelessWidget {
   }
 }
 
-class _MapTab extends StatefulWidget {
+class _MapTab extends StatelessWidget {
   const _MapTab({required this.app});
 
   final dynamic app;
 
   @override
-  State<_MapTab> createState() => _MapTabState();
-}
-
-class _MapTabState extends State<_MapTab> {
-  final _mapController = MapController();
-  Timer? _ticker;
-  LatLng _lastCenter = const LatLng(0, 0);
-
-  static const _fallbackCenter = LatLng(20.5937, 78.9629);
-
-  @override
-  void initState() {
-    super.initState();
-    // Re-pan when the mesh estimate moves while the tab stays open.
-    _ticker = Timer.periodic(const Duration(seconds: 3), (_) {
-      if (!mounted) return;
-      final mesh = widget.app.mesh;
-      final center = mesh.approxLatitude != null
-          ? LatLng(mesh.approxLatitude!, mesh.approxLongitude!)
-          : _fallbackCenter;
-      if (MeshController.kmBetween(
-            center.latitude,
-            center.longitude,
-            _lastCenter.latitude,
-            _lastCenter.longitude,
-          ) >
-          0.2) {
-        _lastCenter = center;
-        _mapController.move(center, 15);
-      }
-      setState(() {});
-    });
-  }
-
-  @override
-  void dispose() {
-    _ticker?.cancel();
-    _mapController.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final p = AppPalette.of(context);
-    final mesh = widget.app.mesh;
-    final nodes = (mesh.nodes.values as Iterable<MeshNodeState>).toList();
-    final estimated = mesh.approxLatitude != null;
-    final center = estimated
-        ? LatLng(mesh.approxLatitude!, mesh.approxLongitude!)
-        : _fallbackCenter;
-    if (_lastCenter == const LatLng(0, 0)) _lastCenter = center;
-
-    return Stack(
-      children: [
-        Positioned.fill(
-          child: FlutterMap(
-            mapController: _mapController,
-            options: MapOptions(
-              initialCenter: center,
-              initialZoom: 15,
-              interactionOptions: const InteractionOptions(
-                flags: InteractiveFlag.all & ~InteractiveFlag.rotate,
-              ),
-            ),
-            children: [
-              // Offline fallback: grid shows through failed/blank tiles.
-              CustomPaint(
-                painter: _GridPainter(grid: p.grid, textDim: p.textDim),
-              ),
-              TileLayer(
-                urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                userAgentPackageName: 'org.aapadsetu.aapadsetu',
-              ),
-              MarkerLayer(
-                markers: [
-                  for (final n in nodes)
-                    if (MeshController.validCoord(n.latitude, n.longitude))
-                      Marker(
-                        point: LatLng(n.latitude, n.longitude),
-                        width: 14,
-                        height: 14,
-                        child: _MapDot(
-                          color: n.nodeId == mesh.nodeId
-                              ? p.primary
-                              : n.hasSos
-                              ? p.error
-                              : p.secondary,
-                          self: n.nodeId == mesh.nodeId,
-                          sos: n.hasSos,
-                        ),
-                      ),
-                ],
-              ),
-              const RichAttributionWidget(
-                attributions: [TextSourceAttribution('OpenStreetMap')],
-              ),
-            ],
-          ),
-        ),
-        Positioned(
-          left: 8,
-          bottom: 8,
-          child: HduReadout('NODES', '${nodes.length}', color: p.secondary),
-        ),
-        Positioned(
-          left: 8,
-          top: 8,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-            decoration: BoxDecoration(
-              border: Border.all(color: estimated ? p.secondary : p.error),
-              color: p.bg.withValues(alpha: 0.8),
-            ),
-            child: Text(
-              estimated
-                  ? 'ESTIMATED POSITION (${mesh.approxSourceCount} '
-                        'device${mesh.approxSourceCount == 1 ? '' : 's'} · '
-                        '≈${mesh.approxRadiusKm!.toStringAsFixed(1)} km)'
-                  : 'NO GPS HW FOUND — LOOKING FOR DEVICES',
-              style: TextStyle(
-                color: estimated ? p.secondary : p.error,
-                fontFamily: 'monospace',
-                fontSize: 9,
-                letterSpacing: 1,
-              ),
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _MapDot extends StatelessWidget {
-  const _MapDot({required this.color, required this.self, required this.sos});
-
-  final Color color;
-  final bool self;
-  final bool sos;
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Container(
-        width: self ? 12 : 8,
-        height: self ? 12 : 8,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: color,
-          boxShadow: sos
-              ? [
-                  BoxShadow(
-                    color: color.withValues(alpha: 0.6),
-                    blurRadius: 10,
-                    spreadRadius: 4,
-                  ),
-                ]
-              : null,
-        ),
-      ),
-    );
-  }
-}
-
-class _GridPainter extends CustomPainter {
-  _GridPainter({required this.grid, required this.textDim});
-
-  final Color grid;
-  final Color textDim;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = grid
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1;
-    const step = 36.0;
-    for (var x = 0.0; x <= size.width; x += step) {
-      canvas.drawLine(Offset(x, 0), Offset(x, size.height), paint);
-    }
-    for (var y = 0.0; y <= size.height; y += step) {
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), paint);
-    }
-    final tp = TextPainter(
-      text: TextSpan(
-        text: 'OFFLINE — AWAITING TILE MAP',
-        style: TextStyle(color: textDim, fontFamily: 'monospace', fontSize: 11),
-      ),
-      textDirection: TextDirection.ltr,
-    )..layout();
-    tp.paint(canvas, Offset((size.width - tp.width) / 2, size.height / 2));
-  }
-
-  @override
-  bool shouldRepaint(covariant _GridPainter oldDelegate) =>
-      oldDelegate.grid != grid;
+  Widget build(BuildContext context) => MeshMap(mesh: app.mesh);
 }

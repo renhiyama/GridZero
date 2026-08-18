@@ -96,7 +96,8 @@ void main() {
 
     expect(find.textContaining('COMMAND HQ'), findsOneWidget);
     expect(find.textContaining('AGGREGATE MESH HEALTH'), findsOneWidget);
-    expect(find.textContaining('TRIAGE HEATMAP'), findsOneWidget);
+    expect(find.textContaining('ENLISTMENT QR'), findsOneWidget);
+    expect(find.textContaining('FIELD MAP'), findsOneWidget);
 
     await teardown(tester, state);
   });

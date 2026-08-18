@@ -10,18 +10,15 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 AppState makeState() {
-  AppState.nativeAdapterFactory =
-      (nodeId) => SimulatedMeshAdapter() as MeshAdapter;
+  AppState.nativeAdapterFactory = (nodeId) =>
+      SimulatedMeshAdapter() as MeshAdapter;
   return AppState();
 }
 
 Widget app(AppState state) => AppScope(
-      state: state,
-      child: MaterialApp(
-        theme: HudTheme.dark,
-        home: const ModeShell(),
-      ),
-    );
+  state: state,
+  child: MaterialApp(theme: HudTheme.dark, home: const ModeShell()),
+);
 
 Future<void> initState(WidgetTester tester, AppState state) =>
     tester.runAsync(() => state.init());
@@ -45,8 +42,10 @@ void main() {
     expect(find.byType(QrImageView), findsOneWidget);
     await tester.drag(find.byType(ListView).first, const Offset(0, -500));
     await tester.pumpAndSettle();
-    expect(find.textContaining('NO GPS HW FOUND', findRichText: true),
-        findsWidgets);
+    expect(
+      find.textContaining('NO GPS HW FOUND', findRichText: true),
+      findsWidgets,
+    );
 
     await teardown(tester, state);
   });
@@ -102,8 +101,9 @@ void main() {
     await teardown(tester, state);
   });
 
-  testWidgets('settings tab exposes theme, accent and permission controls',
-      (tester) async {
+  testWidgets('settings tab exposes theme, accent and permission controls', (
+    tester,
+  ) async {
     final state = makeState();
     await initState(tester, state);
     await tester.pumpWidget(app(state));

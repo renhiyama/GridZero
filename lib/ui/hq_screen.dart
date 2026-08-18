@@ -171,7 +171,7 @@ class _TelemetryPanel extends StatelessWidget {
           children: [
             HduReadout('FRAMES RX', '${app.mesh.framesSeen}'),
             HduReadout('FRAMES RELAYED', '${app.mesh.framesRelayed}'),
-            HduReadout('KNOWN NODES', '${nodes.length}'),
+            HduReadout('PEOPLE IN MESH', '${nodes.length}'),
             HduReadout(
               'ACTIVE SOS BEACONS',
               '$sosCount',

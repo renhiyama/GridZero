@@ -5,14 +5,14 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 LedgerRecord makeRecord(int i, {String prev = ''}) => LedgerRecord(
-      recordId: 'R-$i',
-      citizenId: 'CIT-$i',
-      rationCode: 'Rice',
-      claimedAt: DateTime.utc(2026, 8, 18).millisecondsSinceEpoch ~/ 1000 + i,
-      officerId: 'OFF-1',
-      prevHash: prev,
-      currentHash: '',
-    );
+  recordId: 'R-$i',
+  citizenId: 'CIT-$i',
+  rationCode: 'Rice',
+  claimedAt: DateTime.utc(2026, 8, 18).millisecondsSinceEpoch ~/ 1000 + i,
+  officerId: 'OFF-1',
+  prevHash: prev,
+  currentHash: '',
+);
 
 void runSuite(Future<LedgerStore> Function() factory, String name) {
   group('ledger ($name)', () {
@@ -116,8 +116,7 @@ void main() {
   setUpAll(sqfliteFfiInit);
 
   runSuite(
-    () => SqliteLedgerStore.open(
-        databaseFactoryFfi, inMemoryDatabasePath),
+    () => SqliteLedgerStore.open(databaseFactoryFfi, inMemoryDatabasePath),
     'sqlite-ffi',
   );
 }

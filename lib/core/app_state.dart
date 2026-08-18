@@ -79,6 +79,9 @@ class AppState extends ChangeNotifier {
     ledger = await openLedgerStore();
     mesh = _buildMesh();
     await mesh.start();
+    // Announce immediately so peers learn of this node without waiting for
+    // the first 10s heartbeat; the BLE advertising payload starts empty.
+    mesh.announce();
     _heartbeat = Timer.periodic(const Duration(seconds: 10), (_) {
       mesh.announce();
     });

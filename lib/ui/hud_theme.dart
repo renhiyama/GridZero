@@ -253,3 +253,84 @@ class HudAlertBar extends StatelessWidget {
     );
   }
 }
+
+/// HUD segmented picker: equal bordered boxes, the active one fills with the
+/// accent colour. Replaces the stock Material `SegmentedButton`.
+class HudSegmented<T> extends StatelessWidget {
+  const HudSegmented({
+    super.key,
+    required this.options,
+    required this.value,
+    required this.onChanged,
+  });
+
+  final List<(T, String)> options;
+  final T value;
+  final ValueChanged<T> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = AppPalette.of(context);
+    return Container(
+      decoration: BoxDecoration(
+        border: Border.all(color: p.primaryDim, width: 1),
+      ),
+      child: Row(
+        children: [
+          for (var i = 0; i < options.length; i++) ...[
+            if (i > 0) Container(width: 1, height: 26, color: p.primaryDim),
+            Expanded(
+              child: InkWell(
+                onTap: () => onChanged(options[i].$1),
+                child: Container(
+                  height: 34,
+                  alignment: Alignment.center,
+                  color: options[i].$1 == value
+                      ? p.primary.withValues(alpha: 0.16)
+                      : Colors.transparent,
+                  child: Text(
+                    options[i].$2,
+                    style: TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 11,
+                      letterSpacing: 1,
+                      fontWeight: FontWeight.bold,
+                      color: options[i].$1 == value ? p.primary : p.textDim,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// HUD on/off toggle: bordered square that fills with the accent and shows a
+/// check when enabled. Replaces the stock Material `Switch`.
+class HudToggle extends StatelessWidget {
+  const HudToggle({super.key, required this.value, required this.onChanged});
+
+  final bool value;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = AppPalette.of(context);
+    return InkWell(
+      onTap: () => onChanged(!value),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        width: 44,
+        height: 24,
+        decoration: BoxDecoration(
+          border: Border.all(color: value ? p.primary : p.textDim, width: 1),
+          color: value ? p.primary.withValues(alpha: 0.18) : Colors.transparent,
+        ),
+        child: value ? Icon(Icons.check, size: 14, color: p.primary) : null,
+      ),
+    );
+  }
+}

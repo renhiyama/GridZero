@@ -44,7 +44,7 @@ class _LocationRows extends StatelessWidget {
               HduReadout(
                 'LAT (APPROX)',
                 '${mesh.approxLatitude!.toStringAsFixed(5)} '
-                    '· ${mesh.approxSourceCount} device(s)',
+                    '· ${mesh.approxSourceCount} person(s)',
               ),
               const SizedBox(height: 2),
               HduReadout(
@@ -60,7 +60,7 @@ class _LocationRows extends StatelessWidget {
           children: [
             const HduReadout('POSITION', 'NO GPS HW FOUND'),
             const SizedBox(height: 2),
-            const HduReadout('ESTIMATE', 'LOOKING FOR NEARBY DEVICES'),
+            const HduReadout('ESTIMATE', 'LOOKING FOR NEARBY PEOPLE'),
           ],
         );
       },
@@ -110,26 +110,14 @@ class SettingsScreen extends StatelessWidget {
                         ),
                       ),
                       const SizedBox(height: 6),
-                      SegmentedButton<ThemeMode>(
-                        segments: const [
-                          ButtonSegment(
-                            value: ThemeMode.system,
-                            label: Text('SYSTEM'),
-                            icon: Icon(Icons.brightness_auto),
-                          ),
-                          ButtonSegment(
-                            value: ThemeMode.light,
-                            label: Text('LIGHT'),
-                            icon: Icon(Icons.light_mode),
-                          ),
-                          ButtonSegment(
-                            value: ThemeMode.dark,
-                            label: Text('DARK'),
-                            icon: Icon(Icons.dark_mode),
-                          ),
+                      HudSegmented<ThemeMode>(
+                        options: const [
+                          (ThemeMode.system, 'SYSTEM'),
+                          (ThemeMode.light, 'LIGHT'),
+                          (ThemeMode.dark, 'DARK'),
                         ],
-                        selected: {app.themeMode},
-                        onSelectionChanged: (s) => app.setThemeMode(s.first),
+                        value: app.themeMode,
+                        onChanged: app.setThemeMode,
                       ),
                       const SizedBox(height: 14),
                       Row(
@@ -144,9 +132,8 @@ class SettingsScreen extends StatelessWidget {
                               ),
                             ),
                           ),
-                          Switch(
+                          HudToggle(
                             value: app.useSystemDynamic,
-                            activeThumbColor: p.primary,
                             onChanged: (v) => app.setUseSystemDynamic(v),
                           ),
                         ],
@@ -230,8 +217,12 @@ class SettingsScreen extends StatelessWidget {
                               ),
                             ],
                           ),
+                          if (!ok) ...[
+                            const SizedBox(height: 6),
+                            HduReadout('RADIO', app.mesh.adapter.status),
+                          ],
                           const SizedBox(height: 6),
-                          HduReadout('NEARBY NODES', '$nodes'),
+                          HduReadout('NEARBY PEOPLE', '$nodes'),
                         ],
                       );
                     },

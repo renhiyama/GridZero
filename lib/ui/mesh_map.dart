@@ -121,7 +121,7 @@ class _MeshMapState extends State<MeshMap> {
         Positioned(
           left: 8,
           bottom: 8,
-          child: HduReadout('NODES', '${nodes.length}', color: p.secondary),
+          child: HduReadout('PEOPLE', '${nodes.length}', color: p.secondary),
         ),
         Positioned(
           left: 8,
@@ -135,9 +135,9 @@ class _MeshMapState extends State<MeshMap> {
             child: Text(
               estimated
                   ? 'ESTIMATED POSITION (${m.approxSourceCount} '
-                        'device${m.approxSourceCount == 1 ? '' : 's'} · '
+                        'person${m.approxSourceCount == 1 ? '' : 's'} · '
                         '≈${m.approxRadiusKm!.toStringAsFixed(1)} km)'
-                  : 'NO GPS HW FOUND — LOOKING FOR DEVICES',
+                  : 'NO GPS HW FOUND — LOOKING FOR PEOPLE',
               style: TextStyle(
                 color: estimated ? p.secondary : p.error,
                 fontFamily: 'monospace',

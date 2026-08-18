@@ -4,23 +4,20 @@ import 'package:aapadsetu/core/mesh_packet.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 MeshPacket foreignPacket({int seq = 1, int ttl = 3, int hop = 0}) => MeshPacket(
-      type: MeshPacketType.sosBeacon,
-      senderId: 0x5555,
-      latitude: 19.0,
-      longitude: 72.8,
-      triage: TriageFlags(severity: 4, trapped: true),
-      seq: seq,
-      initialTtl: ttl,
-      hopCount: hop,
-    );
+  type: MeshPacketType.sosBeacon,
+  senderId: 0x5555,
+  latitude: 19.0,
+  longitude: 72.8,
+  triage: TriageFlags(severity: 4, trapped: true),
+  seq: seq,
+  initialTtl: ttl,
+  hopCount: hop,
+);
 
 void main() {
   test('own broadcast registers own node state', () async {
     final adapter = SimulatedMeshAdapter();
-    final ctrl = MeshController(
-      nodeId: 0x1111,
-      adapter: adapter,
-    );
+    final ctrl = MeshController(nodeId: 0x1111, adapter: adapter);
     await ctrl.start();
     await ctrl.broadcastSos(triage: TriageFlags(severity: 2));
 
@@ -32,10 +29,7 @@ void main() {
 
   test('duplicate frames are deduplicated (FR-1.4)', () async {
     final adapter = SimulatedMeshAdapter();
-    final ctrl = MeshController(
-      nodeId: 0x1111,
-      adapter: adapter,
-    );
+    final ctrl = MeshController(nodeId: 0x1111, adapter: adapter);
     final sosEvents = <MeshPacket>[];
     ctrl.sosStream.listen(sosEvents.add);
     await ctrl.start();
@@ -51,30 +45,26 @@ void main() {
     await ctrl.stop();
   });
 
-  test('foreign packet with TTL is relayed with incremented hop (FR-1.3)',
-      () async {
-    final adapter = SimulatedMeshAdapter();
-    final ctrl = MeshController(
-      nodeId: 0x1111,
-      adapter: adapter,
-    );
-    await ctrl.start();
+  test(
+    'foreign packet with TTL is relayed with incremented hop (FR-1.3)',
+    () async {
+      final adapter = SimulatedMeshAdapter();
+      final ctrl = MeshController(nodeId: 0x1111, adapter: adapter);
+      await ctrl.start();
 
-    final relaysBefore = ctrl.framesRelayed;
-    await adapter.injectRemote(foreignPacket(seq: 7, ttl: 3));
-    await Future<void>.delayed(const Duration(milliseconds: 20));
+      final relaysBefore = ctrl.framesRelayed;
+      await adapter.injectRemote(foreignPacket(seq: 7, ttl: 3));
+      await Future<void>.delayed(const Duration(milliseconds: 20));
 
-    expect(ctrl.framesRelayed - relaysBefore, 1);
-    expect(ctrl.nodes[0x5555]!.hopCount, 0);
-    await ctrl.stop();
-  });
+      expect(ctrl.framesRelayed - relaysBefore, 1);
+      expect(ctrl.nodes[0x5555]!.hopCount, 0);
+      await ctrl.stop();
+    },
+  );
 
   test('packet at hop == initial TTL is dropped (FR-1.3)', () async {
     final adapter = SimulatedMeshAdapter();
-    final ctrl = MeshController(
-      nodeId: 0x1111,
-      adapter: adapter,
-    );
+    final ctrl = MeshController(nodeId: 0x1111, adapter: adapter);
     await ctrl.start();
 
     final relaysBefore = ctrl.framesRelayed;
@@ -87,10 +77,7 @@ void main() {
 
   test('own packet is never re-relayed', () async {
     final adapter = SimulatedMeshAdapter();
-    final ctrl = MeshController(
-      nodeId: 0x1111,
-      adapter: adapter,
-    );
+    final ctrl = MeshController(nodeId: 0x1111, adapter: adapter);
     await ctrl.start();
 
     final relaysBefore = ctrl.framesRelayed;

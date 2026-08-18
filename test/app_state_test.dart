@@ -8,8 +8,8 @@ import 'package:aapadsetu/core/mesh/simulated_mesh.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 AppState makeState() {
-  AppState.nativeAdapterFactory =
-      (nodeId) => SimulatedMeshAdapter() as MeshAdapter;
+  AppState.nativeAdapterFactory = (nodeId) =>
+      SimulatedMeshAdapter() as MeshAdapter;
   return AppState();
 }
 

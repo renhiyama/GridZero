@@ -373,8 +373,8 @@ class _LocationPanel extends StatelessWidget {
           ),
           const SizedBox(height: 4),
           Text(
-            'Estimate from ${mesh.approxSourceCount} mesh '
-            'device${mesh.approxSourceCount == 1 ? '' : 's'} '
+            'Estimate from ${mesh.approxSourceCount} nearby '
+            'person${mesh.approxSourceCount == 1 ? '' : 's'} '
             '(no GPS hardware). Radius ≈ ${mesh.approxRadiusKm!.toStringAsFixed(1)} km.',
             style: TextStyle(
               color: p.textDim,
@@ -391,8 +391,8 @@ class _LocationPanel extends StatelessWidget {
         HduReadout('POSITION', 'NO GPS HW FOUND'),
         const SizedBox(height: 4),
         Text(
-          'LOOKING FOR NEARBY DEVICES…\n'
-          'Position will be estimated from mesh devices once they are heard.',
+          'LOOKING FOR NEARBY PEOPLE…\n'
+          'Position will be estimated from mesh people once they are heard.',
           style: TextStyle(
             color: p.textDim,
             fontFamily: 'monospace',

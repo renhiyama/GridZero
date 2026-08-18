@@ -13,6 +13,7 @@ import '../app_scope.dart';
 import '../core/app_state.dart';
 import '../core/ledger/ledger_store.dart';
 import 'hud_theme.dart';
+import 'linux_qr_scan_page.dart';
 import 'mesh_map.dart';
 
 class OfficerScreen extends StatefulWidget {
@@ -24,11 +25,13 @@ class OfficerScreen extends StatefulWidget {
 
 class _OfficerScreenState extends State<OfficerScreen> {
   ClaimResult? _lastClaim;
+  // mobile_scanner covers Android/iOS/macOS/web; Linux uses the V4L2 path.
   final bool _cameraUsable =
-      !kIsWeb &&
-      (defaultTargetPlatform == TargetPlatform.android ||
-          defaultTargetPlatform == TargetPlatform.iOS ||
-          defaultTargetPlatform == TargetPlatform.macOS);
+      kIsWeb ||
+      defaultTargetPlatform == TargetPlatform.android ||
+      defaultTargetPlatform == TargetPlatform.iOS ||
+      defaultTargetPlatform == TargetPlatform.macOS ||
+      defaultTargetPlatform == TargetPlatform.linux;
 
   @override
   Widget build(BuildContext context) {
@@ -112,6 +115,12 @@ class _OfficerScreenState extends State<OfficerScreen> {
       '${r.status.name.toUpperCase()}: ${r.message}';
 }
 
+/// Picks the scanner implementation for the current platform.
+Widget _scannerPageFor(String label) =>
+    defaultTargetPlatform == TargetPlatform.linux
+    ? LinuxQrScanPage(label: label)
+    : _QrScanPage(label: label);
+
 class _EnlistGate extends StatelessWidget {
   const _EnlistGate({required this.app, required this.cameraUsable});
 
@@ -166,9 +175,7 @@ class _EnlistScanButton extends StatelessWidget {
     return FilledButton.icon(
       onPressed: () async {
         final payload = await Navigator.of(context).push<String>(
-          MaterialPageRoute(
-            builder: (_) => const _QrScanPage(label: 'MASTER KEY'),
-          ),
+          MaterialPageRoute(builder: (_) => _scannerPageFor('MASTER KEY')),
         );
         if (payload == null || !context.mounted) return;
         final check = await app.enlistOfficer(payload);
@@ -211,6 +218,12 @@ class _QrScanPageState extends State<_QrScanPage> {
   }
 
   Future<void> _requestCamera() async {
+    // Web has no permission_handler; the browser asks on its own when the
+    // scanner starts. Linux uses the V4L2 page (no permission prompt).
+    if (kIsWeb || defaultTargetPlatform == TargetPlatform.linux) {
+      if (mounted) setState(() => _cameraGranted = true);
+      return;
+    }
     try {
       final status = await Permission.camera.request();
       if (!mounted) return;
@@ -328,7 +341,7 @@ class _ScanTabState extends State<_ScanTab> {
             onPressed: () async {
               final payload = await Navigator.of(context).push<String>(
                 MaterialPageRoute(
-                  builder: (_) => const _QrScanPage(label: 'CITIZEN CLAIM QR'),
+                  builder: (_) => _scannerPageFor('CITIZEN CLAIM QR'),
                 ),
               );
               if (payload == null) return;

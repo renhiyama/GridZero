@@ -92,6 +92,19 @@ enum MeshPacketType {
   );
 }
 
+/// Tactical bracket symbol for in-app packet rendering (e.g. peer lists,
+/// HQ logs): compact at-a-glance identification of the last frame type.
+String packetSymbol(MeshPacketType type) => switch (type) {
+  MeshPacketType.sosBeacon => '[▲ SOS]',
+  MeshPacketType.relayStatus => '[▲ SOS]',
+  MeshPacketType.ledgerRecord => '[≡ LEDGER]',
+  MeshPacketType.ledgerSyncRequest => '[≡ LEDGER]',
+  MeshPacketType.revocationAlert => '[✕ REVOKED]',
+  MeshPacketType.identityAnnounce => '[▸ ID]',
+  MeshPacketType.accountRecord => '[▸ ACC]',
+  MeshPacketType.accountRequest => '[▸ ACC]',
+};
+
 /// TRIAGE_FLAGS bitfield: [7 Medical][6 Trapped][5 Water][4 Food][3..0 Severity].
 class TriageFlags {
   TriageFlags({
@@ -137,19 +150,23 @@ class TriageFlags {
 
 /// A ration claim squeezed into one 22-byte frame for store-and-forward
 /// ledger sync (FR-3.5 / FEAT-LEDG-02). Holds just the identity essentials;
-/// the sender's local hash-chain record keeps the full hashes.
+/// the sender's local hash-chain record keeps the full hashes. Claim units
+/// travel as 2 bits (quarters) in the flags byte; legacy frames (bits clear)
+/// decode to a full unit.
 class CompactRecord {
   CompactRecord({
     required this.citizenId,
     required this.officerId,
     required this.claimedAt,
     required this.rationCode,
+    this.claimUnits = 1.0,
   });
 
   final String citizenId;
   final String officerId;
   final int claimedAt;
   final String rationCode;
+  final double claimUnits;
 }
 
 /// A stolen/suspended ration card flagged by an officer (0x06). Bytes 4-7
@@ -331,7 +348,10 @@ class MeshPacket {
         bd.setUint32(18, rec.claimedAt, Endian.big);
         final idx = kRationCodes.indexOf(rec.rationCode);
         out[12] = idx >= 0 ? idx : 0x0f;
-        out[17] = 0x01;
+        // bit0 = record marker, bits1-3 = claim units in quarters (1-8).
+        // Zero is reserved for legacy frames, which decode as a full unit.
+        final quarter = (rec.claimUnits * 4).round().clamp(1, 8);
+        out[17] = 0x01 | ((quarter & 0x07) << 1);
       case MeshPacketType.revocationAlert:
         final rev = revocation!;
         bd.setInt32(4, idToBits(rev.citizenId), Endian.big);
@@ -442,6 +462,9 @@ class MeshPacket {
             rationCode: code == 0x0f
                 ? 'Other'
                 : (code < kRationCodes.length ? kRationCodes[code] : 'Other'),
+            claimUnits: ((raw[17] >> 1) & 0x07) == 0
+                ? 1.0
+                : (((raw[17] >> 1) & 0x07) * 0.25).toDouble(),
           ),
         );
       case MeshPacketType.revocationAlert:

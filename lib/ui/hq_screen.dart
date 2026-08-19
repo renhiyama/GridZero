@@ -95,6 +95,7 @@ class _HqScreenState extends State<HqScreen> {
                 final telemetry = _TelemetryPanel(app: app);
                 final fieldMap = _FieldMapPanel(app: app);
                 final enlistQr = _EnlistmentPanel();
+                final familyQr = _FamilyEnlistmentPanel();
                 final peers = _PeersPanel(app: app);
                 final heatmap = _HeatmapPanel(
                   nodes: app.mesh!.nodes.values.toList(),
@@ -102,6 +103,7 @@ class _HqScreenState extends State<HqScreen> {
                 );
                 final logs = _LogsPanel(app: app);
                 final revocations = _RevocationsPanel(app: app);
+                final families = _FamilyPanel(app: app);
 
                 if (wide) {
                   return Row(
@@ -130,6 +132,8 @@ class _HqScreenState extends State<HqScreen> {
                             logs,
                             const SizedBox(height: 12),
                             revocations,
+                            const SizedBox(height: 12),
+                            families,
                           ],
                         ),
                       ),
@@ -143,6 +147,8 @@ class _HqScreenState extends State<HqScreen> {
                     const SizedBox(height: 12),
                     enlistQr,
                     const SizedBox(height: 12),
+                    familyQr,
+                    const SizedBox(height: 12),
                     fieldMap,
                     const SizedBox(height: 12),
                     heatmap,
@@ -152,6 +158,8 @@ class _HqScreenState extends State<HqScreen> {
                     logs,
                     const SizedBox(height: 12),
                     revocations,
+                    const SizedBox(height: 12),
+                    families,
                   ],
                 );
               },
@@ -287,6 +295,15 @@ class _PeersPanel extends StatelessWidget {
                         ),
                         const SizedBox(width: 8),
                         Text(
+                          packetSymbol(n.lastType),
+                          style: TextStyle(
+                            color: n.hasSos ? p.error : p.primaryDim,
+                            fontFamily: 'monospace',
+                            fontSize: 10,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Text(
                           '0x${n.nodeId.toRadixString(16).padLeft(4, '0').toUpperCase()}',
                           style: TextStyle(
                             color: p.textDim,
@@ -344,6 +361,39 @@ class _EnlistmentPanel extends StatelessWidget {
           const HduReadout(
             'HOW',
             'Officer app ▸ OFFICER ▸ SCAN MASTER KEY QR pointed at this code.',
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Air-gapped Tier-2 provisioning: an officer scans this QR to cache a family
+/// ration card, unlocking fractional claims against its daily entitlement.
+class _FamilyEnlistmentPanel extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return HudPanel(
+      title: 'FAMILY CARD QR',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Center(
+            child: Container(
+              padding: const EdgeInsets.all(8),
+              color: Colors.white,
+              child: QrImageView(
+                data: kSampleFamilyCardPayload,
+                version: QrVersions.auto,
+                size: 150,
+                backgroundColor: Colors.white,
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          const HduReadout(
+            'HOW',
+            'Officer app ▸ OFFICER ▸ ENLIST FAMILY CARD pointed at this code.',
           ),
         ],
       ),
@@ -502,13 +552,13 @@ class _LogsPanel extends StatelessWidget {
   /// Compact signature verdict for the audit line: verified, tampered, or
   /// unsigned (claims made before officer signing shipped).
   static String _sigBadge(LedgerRecord r) {
-    if (r.signature == null || r.signerPublic == null) return 'NOSIG';
+    if (r.signature == null || r.signerPublic == null) return '[SIG·]';
     final ok = verifyOfficerRecord(
       r.signerPublic!,
       r.recordData(),
       r.signature!,
     );
-    return ok ? 'SIG✓' : 'SIG✗';
+    return ok ? '[SIG✓]' : '[SIG✗]';
   }
 
   @override
@@ -529,8 +579,9 @@ class _LogsPanel extends StatelessWidget {
                       Padding(
                         padding: const EdgeInsets.symmetric(vertical: 2),
                         child: Text(
-                          '[${r.claimedAt}] ${r.citizenId} → '
-                          '${r.rationCode} by ${r.officerId} '
+                          '[≡ LEDGER] [${r.claimedAt}] ${r.citizenId} → '
+                          '${r.rationCode} ${r.claimUnits.toStringAsFixed(2)}U '
+                          'by ${r.officerId} '
                           '·${r.currentHash.substring(0, 8)} '
                           '${_sigBadge(r)}',
                           style: TextStyle(
@@ -588,6 +639,70 @@ class _RevocationsPanel extends StatelessWidget {
                                 fontSize: 10,
                               ),
                             ),
+                          ),
+                      ],
+                    ),
+            );
+          },
+        );
+      },
+    );
+  }
+}
+
+/// Tier-2 household ration cards on file: entitlement vs. what has already
+/// been drawn today, so command sees which families are nearly spent.
+class _FamilyPanel extends StatelessWidget {
+  const _FamilyPanel({required this.app});
+
+  final dynamic app;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = AppPalette.of(context);
+    return AnimatedBuilder(
+      animation: app,
+      builder: (context, _) {
+        return FutureBuilder<List<FamilyCard>>(
+          future: app.ledger.familyCards(),
+          builder: (context, snapshot) {
+            final cards = snapshot.data ?? const <FamilyCard>[];
+            return HudPanel(
+              title: 'FAMILY RATION CARDS',
+              child: cards.isEmpty
+                  ? const HduReadout('CARDS', 'no family cards enlisted')
+                  : Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        for (final c in cards)
+                          FutureBuilder<double>(
+                            future: app.ledger.familyUsedUnits(
+                              c.familyId,
+                              DateTime.now().toUtc().millisecondsSinceEpoch ~/
+                                  1000 ~/
+                                  86400 *
+                                  86400,
+                            ),
+                            builder: (context, usedSnap) {
+                              final used = usedSnap.data ?? 0.0;
+                              final spent = used >= c.dailyUnits;
+                              return Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 2,
+                                ),
+                                child: Text(
+                                  '${c.familyId} ${c.rationCode} '
+                                  '${used.toStringAsFixed(2)}/${c.dailyUnits.toStringAsFixed(2)}U '
+                                  '${spent ? '[SPENT]' : ''} · '
+                                  '${c.memberCitizenIds.length} members',
+                                  style: TextStyle(
+                                    color: spent ? p.error : p.text,
+                                    fontFamily: 'monospace',
+                                    fontSize: 10,
+                                  ),
+                                ),
+                              );
+                            },
                           ),
                       ],
                     ),

@@ -32,19 +32,40 @@ enum Role { citizen, officer, admin }
 const String _kAccountsPref = 'accounts';
 
 class Account {
-  Account({required this.username, required this.role, required this.hash});
+  Account({
+    required this.username,
+    required this.role,
+    required this.hash,
+    this.pinHash,
+    this.familyId,
+  });
 
   final String username;
   final Role role;
   final String hash;
 
-  Map<String, Object?> toJson() => {'role': role.name, 'hash': hash};
+  /// Knowledge-factor PIN hash (Tier-2 fallback verification). Rides the
+  /// claim QR as `ph` so an officer can verify possession without a secret
+  /// ever leaving this device.
+  final String? pinHash;
+
+  /// Tier-2 family ration card this citizen draws against, if any.
+  final String? familyId;
+
+  Map<String, Object?> toJson() => {
+    'role': role.name,
+    'hash': hash,
+    'pin': pinHash,
+    'family': familyId,
+  };
 
   static Account fromJson(String username, Map<String, Object?> json) =>
       Account(
         username: username,
         role: Role.values.byName(json['role'] as String),
         hash: json['hash'] as String,
+        pinHash: json['pin'] as String?,
+        familyId: json['family'] as String?,
       );
 }
 
@@ -54,6 +75,15 @@ class AppState extends ChangeNotifier {
 
   String? _officerId;
   String? get officerId => _officerId;
+
+  /// Knowledge-PIN hash for this session's account (fallback verification).
+  /// Empty until an account with a PIN logs in.
+  String? _pinHash;
+  String? get pinHash => _pinHash;
+
+  /// Tier-2 family ration card this session's account draws against.
+  String? _familyId;
+  String? get familyId => _familyId;
 
   bool loggedIn = false;
   String _username = '';
@@ -146,6 +176,9 @@ class AppState extends ChangeNotifier {
   static String _hashPassword(String password) =>
       sha256.convert(utf8.encode('gridzero:pw:$password')).toString();
 
+  static String _hashPin(String pin) =>
+      sha256.convert(utf8.encode('gridzero:pin:$pin')).toString();
+
   /// Deterministic per-account identity: stable across logins so peers never
   /// see this device as a new node, and identical on this phone after a
   /// "Delete All Data & Logout" + re-register with the same username.
@@ -235,8 +268,9 @@ class AppState extends ChangeNotifier {
     }
     final buf = _chunkBufs.putIfAbsent(fromNodeId, _ChunkBuf.new);
     if (c.index == 0) buf.reset();
-    if (c.index != buf.next)
+    if (c.index != buf.next) {
       return; // out of order / restarted; next burst heals
+    }
     buf.add(c);
     if (buf.next == c.total) {
       final account = assembleAccount(buf.chunks);
@@ -266,7 +300,13 @@ class AppState extends ChangeNotifier {
   }
 
   /// Creates a local account then logs it in.
-  Future<String?> register(String username, String password, Role role) async {
+  Future<String?> register(
+    String username,
+    String password,
+    Role role, {
+    String? pin,
+    String? familyId,
+  }) async {
     final name = username.trim().toUpperCase();
     if (name.isEmpty) return 'enter a username';
     if (name.length > 12) {
@@ -274,6 +314,9 @@ class AppState extends ChangeNotifier {
     }
     if (name == 'ADMIN') return 'ADMIN is reserved for HQ';
     if (password.length < 4) return 'password must be 4+ characters';
+    if (pin != null && !RegExp(r'^\d{4,6}$').hasMatch(pin)) {
+      return 'PIN must be 4-6 digits';
+    }
     final prefs = await SharedPreferences.getInstance();
     final accounts = _readAccounts(prefs);
     if (accounts.containsKey(name)) return 'account $name already exists';
@@ -281,6 +324,8 @@ class AppState extends ChangeNotifier {
       username: name,
       role: role,
       hash: _hashPassword(password),
+      pinHash: pin == null ? null : _hashPin(pin),
+      familyId: familyId,
     );
     await _writeAccounts(prefs, accounts);
     return _startSession(username: name, role: role);
@@ -318,6 +363,10 @@ class AppState extends ChangeNotifier {
     _username = username;
     _role = role;
     _citizenId = _freshCitizenId(_seed());
+    final prefs = await SharedPreferences.getInstance();
+    final sessionAccount = _readAccounts(prefs)[username];
+    _pinHash = sessionAccount?.pinHash;
+    _familyId = sessionAccount?.familyId;
     mesh = _buildMesh(_seed());
     final m = mesh!;
     m.onLedgerRecord = _onLedgerRecord;
@@ -407,6 +456,7 @@ class AppState extends ChangeNotifier {
         prevHash: '',
         currentHash: '',
         syncStatus: 1,
+        claimUnits: record.claimUnits,
       ),
     );
     if (result.ok) notifyListeners();
@@ -483,6 +533,8 @@ class AppState extends ChangeNotifier {
     _role = Role.citizen;
     _citizenId = '';
     _officerId = null;
+    _pinHash = null;
+    _familyId = null;
     notifyListeners();
   }
 
@@ -566,6 +618,9 @@ class AppState extends ChangeNotifier {
     'c': citizenId,
     'w': totpTimeWindow(DateTime.now()),
     'tok': currentToken(),
+    if (username.isNotEmpty) 'n': username,
+    if (_pinHash != null) 'ph': _pinHash,
+    if (_familyId != null) 'f': _familyId,
   });
 
   void setSosActive(bool active) {
@@ -590,11 +645,18 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Officer path: verify a scanned citizen QR and append a claim.
+  /// Officer path: verify a scanned citizen QR and append a claim. Primary
+  /// verification is the rotating TOTP token; when the token window fails
+  /// (expired or a forged QR) the officer may fall back to the citizen's
+  /// knowledge PIN carried in the payload ([fallbackPin]) plus a visual
+  /// identity check at the terminal. Claim units (0.25–1.0) draw against a
+  /// Tier-2 family card when the citizen belongs to one.
   Future<ClaimResult> claimFromPayload(
     String payload,
-    String rationCode,
-  ) async {
+    String rationCode, {
+    double claimUnits = 1.0,
+    String? fallbackPin,
+  }) async {
     final map = _decodeClaimPayload(payload);
     if (map == null) {
       return ClaimResult(ClaimStatus.error, message: 'malformed claim QR');
@@ -602,8 +664,16 @@ class AppState extends ChangeNotifier {
     final citizenIdFromQr = map['c'] as String?;
     final window = map['w'] as int?;
     final token = map['tok'] as String?;
+    final familyIdFromQr = map['f'] as String?;
+    final pinHashFromQr = map['ph'] as String?;
     if (citizenIdFromQr == null || window == null || token == null) {
       return ClaimResult(ClaimStatus.error, message: 'claim QR missing fields');
+    }
+    if (claimUnits <= 0 || claimUnits > 1) {
+      return ClaimResult(
+        ClaimStatus.error,
+        message: 'claim units must be within 0.25–1.0',
+      );
     }
     final key = sha256
         .convert(utf8.encode('gridzero:citizen:$citizenIdFromQr'))
@@ -615,15 +685,27 @@ class AppState extends ChangeNotifier {
       now: DateTime.now(),
     );
     if (!valid) {
-      return ClaimResult(
-        ClaimStatus.invalidToken,
-        message: 'TOTP token expired or forged',
-      );
+      if (fallbackPin != null && pinHashFromQr != null) {
+        if (_hashPin(fallbackPin) != pinHashFromQr) {
+          return ClaimResult(
+            ClaimStatus.pinMismatch,
+            message: 'PIN fallback rejected — knowledge factor mismatch',
+          );
+        }
+      } else {
+        return ClaimResult(
+          ClaimStatus.invalidToken,
+          message: 'TOTP token expired or forged — use PIN fallback',
+        );
+      }
     }
     return _appendClaim(
       citizenId: citizenIdFromQr,
       rationCode: rationCode,
       officerId: officerId ?? 'OFF-UNENLISTED',
+      claimUnits: claimUnits,
+      familyId: familyIdFromQr,
+      fallback: valid == false,
     );
   }
 
@@ -631,6 +713,9 @@ class AppState extends ChangeNotifier {
     required String citizenId,
     required String rationCode,
     required String officerId,
+    required double claimUnits,
+    String? familyId,
+    bool fallback = false,
   }) async {
     final revokedReason = _revoked[bitsToId('CIT-', idToBits(citizenId))];
     if (revokedReason != null) {
@@ -640,6 +725,44 @@ class AppState extends ChangeNotifier {
             'citizen ${bitsToId('CIT-', idToBits(citizenId))} card is '
             '${revocationReasonLabel(revokedReason)} — claims refused',
       );
+    }
+    // Tier-2 gate: a family claim must reference a known card and the
+    // citizen must be on its roster; the daily cap is enforced below.
+    if (familyId != null) {
+      final card = await ledger.familyCard(familyId);
+      if (card == null) {
+        return ClaimResult(
+          ClaimStatus.familyUnknown,
+          message: 'family card $familyId not cached — enlist it first',
+        );
+      }
+      if (card.rationCode != rationCode) {
+        return ClaimResult(
+          ClaimStatus.familyUnknown,
+          message:
+              'family card $familyId is ${card.rationCode}, not $rationCode',
+        );
+      }
+      if (!card.memberCitizenIds.contains(citizenId)) {
+        return ClaimResult(
+          ClaimStatus.notFamilyMember,
+          message: 'citizen $citizenId is not on family card $familyId roster',
+        );
+      }
+      final dayStart =
+          DateTime.now().toUtc().millisecondsSinceEpoch ~/
+          1000 ~/
+          86400 *
+          86400;
+      final used = await ledger.familyUsedUnits(familyId, dayStart);
+      if (used + claimUnits > card.dailyUnits) {
+        return ClaimResult(
+          ClaimStatus.familyExhausted,
+          message:
+              'family card $familyId daily ration exhausted '
+              '(${used.toStringAsFixed(2)}/${card.dailyUnits.toStringAsFixed(2)} units)',
+        );
+      }
     }
     final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
     final prevHash = await ledger.lastHash();
@@ -655,6 +778,8 @@ class AppState extends ChangeNotifier {
       officerId: officerId,
       prevHash: prevHash,
       currentHash: '',
+      claimUnits: claimUnits,
+      familyId: familyId,
     );
     record.currentHash = record.computeCurrentHash();
     if (_role == Role.officer) {
@@ -682,6 +807,7 @@ class AppState extends ChangeNotifier {
             officerId: record.officerId,
             claimedAt: record.claimedAt,
             rationCode: record.rationCode,
+            claimUnits: record.claimUnits,
           ),
         );
         m.broadcastLedgerSyncRequest();
@@ -725,6 +851,17 @@ class AppState extends ChangeNotifier {
     if (check.ok) {
       _officerId = check.masterKey!.officerId;
       _role = Role.officer;
+      notifyListeners();
+    }
+    return check;
+  }
+
+  /// Tier-2 family enlistment from a signed HQ QR. Caches the card locally
+  /// so claims against it can be verified and capped offline.
+  Future<FamilyCardCheck> enlistFamily(String payload) async {
+    final check = await verifyFamilyCard(payload: payload);
+    if (check.ok) {
+      await ledger.upsertFamilyCard(check.card!);
       notifyListeners();
     }
     return check;

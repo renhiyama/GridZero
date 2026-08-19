@@ -19,6 +19,8 @@ class LoginScreen extends StatefulWidget {
 class _LoginScreenState extends State<LoginScreen> {
   final _username = TextEditingController();
   final _password = TextEditingController();
+  final _pin = TextEditingController();
+  final _family = TextEditingController();
   bool _registerMode = false;
   Role _registerRole = Role.citizen;
   String? _error;
@@ -28,6 +30,8 @@ class _LoginScreenState extends State<LoginScreen> {
   void dispose() {
     _username.dispose();
     _password.dispose();
+    _pin.dispose();
+    _family.dispose();
     super.dispose();
   }
 
@@ -38,7 +42,15 @@ class _LoginScreenState extends State<LoginScreen> {
       _error = null;
     });
     final result = _registerMode
-        ? await app.register(_username.text, _password.text, _registerRole)
+        ? await app.register(
+            _username.text,
+            _password.text,
+            _registerRole,
+            pin: _pin.text.trim().isEmpty ? null : _pin.text.trim(),
+            familyId: _family.text.trim().isEmpty
+                ? null
+                : _family.text.trim().toUpperCase(),
+          )
         : await app.login(_username.text, _password.text);
     if (!mounted) return;
     setState(() {
@@ -136,6 +148,36 @@ class _LoginScreenState extends State<LoginScreen> {
                             ],
                             value: _registerRole,
                             onChanged: (v) => setState(() => _registerRole = v),
+                          ),
+                          const SizedBox(height: 16),
+                          TextField(
+                            controller: _pin,
+                            obscureText: true,
+                            keyboardType: TextInputType.number,
+                            maxLength: 6,
+                            style: const TextStyle(
+                              fontFamily: 'monospace',
+                              fontSize: 14,
+                            ),
+                            decoration: const InputDecoration(
+                              labelText: 'KNOWLEDGE PIN (4-6 DIGITS, FALLBACK)',
+                              counterText: '',
+                              border: UnderlineInputBorder(),
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          TextField(
+                            controller: _family,
+                            autocorrect: false,
+                            enableSuggestions: false,
+                            style: const TextStyle(
+                              fontFamily: 'monospace',
+                              fontSize: 14,
+                            ),
+                            decoration: const InputDecoration(
+                              labelText: 'FAMILY CARD ID (OPTIONAL, FAM-..)',
+                              border: UnderlineInputBorder(),
+                            ),
                           ),
                         ],
                         if (_error != null) ...[

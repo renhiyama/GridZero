@@ -61,6 +61,22 @@ CREATE TABLE IF NOT EXISTS officer_keys (
 );
 ''';
 
+/// v4 additions: Tier-2 family ration cards and fractional claims. Both
+/// claim tables gain the card link + units; existing rows default to 1.0
+/// individual claims.
+const String kLedgerSchemaV4 = '''
+ALTER TABLE ledger_records ADD COLUMN claim_units REAL NOT NULL DEFAULT 1.0;
+ALTER TABLE ledger_records ADD COLUMN family_id TEXT;
+ALTER TABLE sync_records ADD COLUMN claim_units REAL NOT NULL DEFAULT 1.0;
+ALTER TABLE sync_records ADD COLUMN family_id TEXT;
+CREATE TABLE IF NOT EXISTS family_cards (
+    family_id TEXT PRIMARY KEY,
+    ration_code TEXT NOT NULL,
+    daily_units REAL NOT NULL,
+    member_ids TEXT NOT NULL
+);
+''';
+
 class SqliteLedgerStore implements LedgerStore {
   SqliteLedgerStore(this._db, this._path);
 
@@ -71,16 +87,18 @@ class SqliteLedgerStore implements LedgerStore {
     final db = await factory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 3,
+        version: 4,
         onCreate: (db, _) async {
           await db.execute(kLedgerSchema);
           await _applyV3(db);
+          await _applyV4(db);
         },
         // v1 DBs predate sync_records; CREATE IF NOT EXISTS upgrades in place.
-        // v2->v3 adds signatures + revocation tables.
+        // v2->v3 adds signatures + revocation tables; v3->v4 adds families.
         onUpgrade: (db, oldVersion, _) async {
           await db.execute(kLedgerSchema);
           if (oldVersion < 3) await _applyV3(db);
+          if (oldVersion < 4) await _applyV4(db);
         },
       ),
     );
@@ -91,6 +109,20 @@ class SqliteLedgerStore implements LedgerStore {
   /// runs this through onCreate too), so each statement is best-effort.
   static Future<void> _applyV3(Database db) async {
     final statements = kLedgerSchemaV3.split(';');
+    for (final stmt in statements) {
+      final trimmed = stmt.trim();
+      if (trimmed.isEmpty) continue;
+      try {
+        await db.execute(trimmed);
+      } on Exception {
+        // column already present, or table exists — nothing to migrate.
+      }
+    }
+  }
+
+  /// v4 migration, same best-effort semantics as [_applyV3].
+  static Future<void> _applyV4(Database db) async {
+    final statements = kLedgerSchemaV4.split(';');
     for (final stmt in statements) {
       final trimmed = stmt.trim();
       if (trimmed.isEmpty) continue;
@@ -175,6 +207,8 @@ class SqliteLedgerStore implements LedgerStore {
         'ration_code': record.rationCode,
         'claimed_at': record.claimedAt,
         'officer_id': record.officerId,
+        'claim_units': record.claimUnits,
+        'family_id': record.familyId,
         'received_from': receivedFrom,
         'received_at': DateTime.now().millisecondsSinceEpoch ~/ 1000,
       }, conflictAlgorithm: ConflictAlgorithm.ignore);
@@ -319,5 +353,53 @@ class SqliteLedgerStore implements LedgerStore {
       'signer_public': publicKey,
       'signer_private': privateKey,
     }, conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  @override
+  Future<void> upsertFamilyCard(FamilyCard card) async {
+    await _db.insert(
+      'family_cards',
+      card.toMap(),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  @override
+  Future<FamilyCard?> familyCard(String familyId) async {
+    final rows = await _db.query(
+      'family_cards',
+      where: 'family_id = ?',
+      whereArgs: [familyId],
+      limit: 1,
+    );
+    return rows.isEmpty ? null : FamilyCard.fromMap(rows.first);
+  }
+
+  @override
+  Future<List<FamilyCard>> familyCards() async {
+    final rows = await _db.query('family_cards');
+    return rows.map(FamilyCard.fromMap).toList();
+  }
+
+  @override
+  Future<double> familyUsedUnits(String familyId, int dayStartEpoch) async {
+    final rows = await _db.rawQuery(
+      'SELECT COALESCE(SUM(claim_units), 0) AS used FROM ('
+      '  SELECT claim_units FROM ledger_records '
+      '   WHERE family_id = ? AND claimed_at >= ? AND claimed_at < ?'
+      '  UNION ALL '
+      '  SELECT claim_units FROM sync_records '
+      '   WHERE family_id = ? AND claimed_at >= ? AND claimed_at < ?'
+      ')',
+      [
+        familyId,
+        dayStartEpoch,
+        dayStartEpoch + 86400,
+        familyId,
+        dayStartEpoch,
+        dayStartEpoch + 86400,
+      ],
+    );
+    return (rows.first['used'] as num).toDouble();
   }
 }

@@ -11,11 +11,22 @@ import 'dart:convert';
 import 'package:flutter/services.dart';
 import 'package:pointycastle/export.dart';
 
+import 'ledger/ledger_store.dart';
+
 /// Sample master key produced by `tool/generate_master_key.dart` (v=1).
 const String kSampleMasterKeyPayload =
-    '{"v":1,"officer_id":"OFF-0A3F0FAB","issued_at":1787051724,"sig":"hmWBrjWHw8aSTrIIRP++LXpYFxNm24JJkFwogHxnuzSRcfBJaZnGa1P7la+Wzwyh3X6YUXq8oj4EUB4FHsyp6KQ9PAXMTUfn/MBn4UuIqSFJQfF2HcSu7JX1zBsGI0gn0wbrCqwUw0wvYkj/3rT4/W5n21GRFTW4GbPgGvEc35/Fkpz6e5DlpuE5GPyId+XuDPLYxUl5YSMmJ6urVsL8oO8sYEoCDXABZyWZ4qqvQgMLcRZTkZsqsavNrF99T9EUFZCmAlNv3caTg/gJpbQt5SbGqN8ZhArL7Mrw+j5MlH0u/n58cZYg7IzEfqW/MhZghH+lPNjssgn8qYaprmrfqA=="}';
+    '{"v":1,"officer_id":"OFF-0A3F0FAB","issued_at":1787082581,"sig":"BjbFIYFKLf0ROogTuJeCekJ0IHeRsLamok5GMBLPG/3vrfLEE+kQPm2/M2OlJo0zxy5nSp6/vM2S4InBoWIEve1fdtew8pwpgKyjgOBwWKbPYwe9pxn94ViRx7JHiVt3EZ4QDoqAZw9ueVJmMnRVycwuUwTZhiR1LbxzpEYskoVCDv86l51vzmNS1uiU6EhHwGtD6uLaqv69Ef/HDfLZHRB894v77hQWRukikX6ISzvn4O8W9Ctj0Ok6JTfyY+j8TYx7JIk4WgeY5BxQlFjbNx5Te7pvSiOo8QAkrnJ1oSWopGZwR6H842O1op5n3z6jllehGxuajB6dqAPkOx4kXw=="}';
+
+/// Sample Tier-2 family card signed by the same HQ key, members replaced
+/// with the demo roster. Officers cache whatever card they scan.
+const String kSampleFamilyCardPayload =
+    '{"v":1,"kind":"family","family_id":"FAM-DEADBEEF","ration_code":"Rice","daily_units":4.0,"member_ids":["CIT-00000001","CIT-00000002"],"issued_at":1787082581,"sig":"AVB+kL9yWAbIDYEKgDL6Rfrn8cZ/Y5NQD9OIwA+uJ/YoNzwlkVZPcaLD3SDmPGxUvLjJIlpO2KO/cGG4I4SkK6nTSNHa5ukrYA/sZEwgT74p0EqpO+9UQAO1dW2DVO3+pN7fnQlCtH+J48g9HUFApNHVSIjP/UViquPAXMt9On16msrLQFoaO3yNA/PnTRzpDlNSQzqKaVdvCginp1EKaVleDVxdH7M4YNzMU8eIHIBfHBCoQS/Da3SaX0NPwPqf5J/77CZSDXaA/4+92QcJgwbsD/cLy7oucRAY6La6PTeQSq6OvJ7k5jFqrWfmfsjhWyM0Y+dEWd1TRXI5NqKGUg=="}';
 
 const String _canonicalPrefix = 'v=1|officer_id=';
+
+/// Canonical prefix for Tier-2 family card payloads, distinct from the
+/// officer key so a family QR can never be mistaken for an enlistment.
+const String _familyCanonicalPrefix = 'v=1|kind=family|family_id=';
 
 class MasterKey {
   MasterKey({required this.officerId, required this.issuedAt});
@@ -31,6 +42,16 @@ class MasterKeyCheck {
   final bool ok;
   final String message;
   final MasterKey? masterKey;
+}
+
+/// Tier-2 family card result: a verified [FamilyCard] ready to cache.
+class FamilyCardCheck {
+  FamilyCardCheck.ok(this.card) : message = '', ok = true;
+  FamilyCardCheck.fail(this.message) : card = null, ok = false;
+
+  final bool ok;
+  final String message;
+  final FamilyCard? card;
 }
 
 Future<String> loadOfficerPublicKeyPem() async {
@@ -134,4 +155,73 @@ Future<MasterKeyCheck> verifyMasterKey({
     return MasterKeyCheck.fail('signature invalid — master key rejected');
   }
   return MasterKeyCheck.ok(key);
+}
+
+/// Parses a family enlistment QR payload without trusting it:
+/// `{"v":1,"kind":"family","family_id":"FAM-..","ration_code":"Rice",
+/// "daily_units":4,"member_ids":["CIT-.."],"issued_at":..,"sig":".."}`.
+FamilyCard? parseFamilyCardPayload(String payload) {
+  try {
+    final map = jsonDecode(payload);
+    if (map is! Map<String, dynamic>) return null;
+    if (map['v'] != 1 || map['kind'] != 'family') return null;
+    final familyId = map['family_id'];
+    final rationCode = map['ration_code'];
+    final dailyUnits = map['daily_units'];
+    final members = map['member_ids'];
+    final sig = map['sig'];
+    if (familyId is! String ||
+        rationCode is! String ||
+        dailyUnits is! num ||
+        members is! List ||
+        sig is! String) {
+      return null;
+    }
+    final memberIds = members.whereType<String>().toList();
+    if (memberIds.isEmpty || memberIds.length != members.length) return null;
+    return FamilyCard(
+      familyId: familyId,
+      rationCode: rationCode,
+      dailyUnits: dailyUnits.toDouble(),
+      memberCitizenIds: memberIds,
+    );
+  } catch (_) {
+    return null;
+  }
+}
+
+String _familyCanonical(FamilyCard card) {
+  final members = card.memberCitizenIds.join(',');
+  return '$_familyCanonicalPrefix${card.familyId}|ration_code=${card.rationCode}'
+      '|daily_units=${card.dailyUnits.toStringAsFixed(2)}'
+      '|member_ids=$members';
+}
+
+/// Validates a family enlistment QR against the same embedded HQ public key
+/// used for officer keys. Returns a usable [FamilyCard] on success.
+Future<FamilyCardCheck> verifyFamilyCard({
+  required String payload,
+  String? officerPublicKeyPem,
+}) async {
+  final card = parseFamilyCardPayload(payload);
+  if (card == null) {
+    return FamilyCardCheck.fail('malformed family card payload');
+  }
+  final pem = officerPublicKeyPem ?? await loadOfficerPublicKeyPem();
+  final pub = parseRsaPublicPem(pem);
+  final sig = base64Decode(jsonDecode(payload)['sig'] as String);
+
+  final signer = RSASigner(SHA256Digest(), '0609608648016503040201')
+    ..init(
+      false,
+      PublicKeyParameter<RSAPublicKey>(RSAPublicKey(pub.modulus, pub.exponent)),
+    );
+  final valid = signer.verifySignature(
+    utf8.encode(_familyCanonical(card)),
+    RSASignature(Uint8List.fromList(sig)),
+  );
+  if (!valid) {
+    return FamilyCardCheck.fail('signature invalid — family card rejected');
+  }
+  return FamilyCardCheck.ok(card);
 }

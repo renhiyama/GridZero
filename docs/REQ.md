@@ -216,6 +216,12 @@ FR-3.8: Every officer-issued ledger claim MUST be signed with a deterministic EC
 
 FR-3.9: A terminal MAY adopt a locally unknown account for cross-device login by probing the mesh (0x08), reassembling the credential chunks announced by an adjacent device (0x07), and adopting the account only when the full password hash matches the typed password. ADMIN accounts MUST NOT be announced or adopted over the mesh.
 
+FR-3.10: Claims MAY be fractional (0.25–1.0 ration units per person) and MAY carry a familyId. When a claim carries a familyId, the claim point MUST honor a signed Tier-2 family ration card (canonical payload signed by the HQ key) and refuse the claim when the family card is unknown, the claimant is not a listed member, or the household's cumulative units for the UTC day would exceed the card's daily entitlement.
+
+FR-3.11: Citizens MAY register a 4–6 digit knowledge PIN alongside their account. When the TOTP window is stale or forged, the officer terminal MUST offer a PIN fallback: the claim succeeds only if the SHA-256 hash of the presented PIN matches the PIN hash embedded in the citizen's QR payload; otherwise the claim is rejected as a PIN mismatch.
+
+FR-3.12: In-app packet and ledger rendering MUST use tactical bracket symbols so operators can read a feed at a glance: SOS beacons as `[▲ SOS]`, ledger records as `[≡ LEDGER]`, revocation alerts as `[✕ REVOKED]`, identity announcements as `[▸ ID]`, account records as `[▸ ACC]`, and signature status as `[SIG✓]`/`[SIG✗]`/`[SIG·]`. Claims display their unit amount (e.g. `0.75U`) and ledger rows carry the familyId when present.
+
 FR-4: Web Command HQ & Mesh Simulation (Judge Visualizer)
 
 FR-4.1: The Web target MUST render a top-level Command HQ dashboard displaying live aggregate mesh health, active SOS beacons, and supply allocation logs.
@@ -335,7 +341,7 @@ FLAGS
 
 uint8
 
-Bitfield: bit 0 = SOS-cleared marker (deactivated SOS propagation).
+Bitfield: bit 0 = SOS-cleared marker (deactivated SOS propagation). For 0x05 (Ledger Record) bit 0 is the record marker and bits 1–3 encode the fractional claim as quarter-units (1–8); value 0 is reserved for legacy frames and decodes to a full unit (1.0).
 
 Bytes 18–21
 
@@ -355,11 +361,20 @@ CREATE TABLE IF NOT EXISTS ledger_records (
     officer_id TEXT NOT NULL,
     prev_hash TEXT NOT NULL,
     current_hash TEXT NOT NULL,
-    sync_status INTEGER DEFAULT 0 -- 0: Local Only, 1: Mesh Synced, 2: Cloud Synced
+    sync_status INTEGER DEFAULT 0, -- 0: Local Only, 1: Mesh Synced, 2: Cloud Synced
+    claim_units REAL NOT NULL DEFAULT 1.0, -- fractional ration units (schema v4)
+    family_id TEXT -- Tier-2 family ration card (schema v4)
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_citizen_daily_claim 
 ON ledger_records (citizen_id, ration_code, (claimed_at / 86400));
+
+CREATE TABLE IF NOT EXISTS family_cards (
+    family_id TEXT PRIMARY KEY,
+    ration_code TEXT NOT NULL,
+    daily_units REAL NOT NULL,
+    member_ids TEXT NOT NULL -- JSON array of citizen ids
+);
 
 CREATE TABLE IF NOT EXISTS known_mesh_nodes (
     node_id INTEGER PRIMARY KEY,

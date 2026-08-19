@@ -107,7 +107,7 @@ void main() {
     expect(find.textContaining('COMMAND HQ'), findsOneWidget);
     expect(find.textContaining('AGGREGATE MESH HEALTH'), findsOneWidget);
     expect(find.textContaining('ENLISTMENT QR'), findsOneWidget);
-    expect(find.textContaining('FIELD MAP'), findsOneWidget);
+    expect(find.textContaining('FAMILY CARD QR'), findsOneWidget);
 
     await teardown(tester, state);
   });

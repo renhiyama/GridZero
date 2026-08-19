@@ -22,6 +22,8 @@ class LedgerRecord {
     this.syncStatus = 0,
     this.signature,
     this.signerPublic,
+    this.claimUnits = 1.0,
+    this.familyId,
   });
 
   final String recordId;
@@ -29,6 +31,15 @@ class LedgerRecord {
   final String rationCode;
   final int claimedAt;
   final String officerId;
+
+  /// Ration entitlement consumed by this claim, in fraction units
+  /// (0.25–1.0). An individual claim is 1.0; a family member may take a
+  /// partial share so a household card stretches across members.
+  final double claimUnits;
+
+  /// Family ration card (Tier-2 identity) this claim drew against; null for
+  /// individual-only claims. The daily cap is enforced per card.
+  final String? familyId;
 
   /// Chain anchors. [prevHash] links to the previous record; [currentHash]
   /// is SHA256(recordData || prevHash). Made mutable so builders can compute
@@ -65,6 +76,8 @@ class LedgerRecord {
     'sync_status': syncStatus,
     'signature': signature,
     'signer_public': signerPublic,
+    'claim_units': claimUnits,
+    'family_id': familyId,
   };
 
   factory LedgerRecord.fromMap(Map<String, Object?> map) => LedgerRecord(
@@ -78,6 +91,8 @@ class LedgerRecord {
     syncStatus: map['sync_status'] as int? ?? 0,
     signature: map['signature'] as List<int>?,
     signerPublic: map['signer_public'] as List<int>?,
+    claimUnits: (map['claim_units'] as num?)?.toDouble() ?? 1.0,
+    familyId: map['family_id'] as String?,
   );
 }
 
@@ -87,6 +102,10 @@ enum ClaimStatus {
   invalidToken,
   chainMismatch,
   revoked,
+  familyUnknown,
+  notFamilyMember,
+  familyExhausted,
+  pinMismatch,
   error,
 }
 
@@ -124,6 +143,43 @@ class RevocationEntry {
   final int reasonCode;
   final int issuedAt;
   final int sourceNode;
+}
+
+/// Tier-2 identity: a household ration card grouping several citizen
+/// identities under one daily entitlement. Provisioned offline by HQ via a
+/// signed family enlistment QR and cached in every terminal that needs it.
+class FamilyCard {
+  FamilyCard({
+    required this.familyId,
+    required this.rationCode,
+    required this.dailyUnits,
+    required this.memberCitizenIds,
+  });
+
+  final String familyId;
+  final String rationCode;
+
+  /// Total ration units the household may draw per UTC day; members share
+  /// it via fractional claims.
+  final double dailyUnits;
+
+  /// Citizen identities entitled to draw against this card.
+  final List<String> memberCitizenIds;
+
+  Map<String, Object?> toMap() => {
+    'family_id': familyId,
+    'ration_code': rationCode,
+    'daily_units': dailyUnits,
+    'member_ids': jsonEncode(memberCitizenIds),
+  };
+
+  factory FamilyCard.fromMap(Map<String, Object?> map) => FamilyCard(
+    familyId: map['family_id'] as String,
+    rationCode: map['ration_code'] as String,
+    dailyUnits: (map['daily_units'] as num).toDouble(),
+    memberCitizenIds: (jsonDecode(map['member_ids'] as String) as List)
+        .cast<String>(),
+  );
 }
 
 /// Persistence contract used by both the SQLite and in-memory backends.
@@ -187,4 +243,16 @@ abstract class LedgerStore {
     List<int> publicKey,
     List<int> privateKey,
   );
+
+  /// Tier-2 family ration cards (Schema v3): provisioned by HQ, verified by
+  /// any terminal that holds the card, capped by [familyUsedUnits].
+  Future<void> upsertFamilyCard(FamilyCard card);
+
+  Future<FamilyCard?> familyCard(String familyId);
+
+  Future<List<FamilyCard>> familyCards();
+
+  /// Total units already drawn against a card in the given UTC day (epoch
+  /// seconds at day start), summed over local and mesh-synced claims.
+  Future<double> familyUsedUnits(String familyId, int dayStartEpoch);
 }

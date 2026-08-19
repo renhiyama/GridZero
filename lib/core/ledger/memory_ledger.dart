@@ -10,6 +10,7 @@ class MemoryLedgerStore implements LedgerStore {
   final Map<int, Map<String, Object?>> _nodes = {};
   final Map<String, RevocationEntry> _revocations = {};
   final Map<String, (List<int>, List<int>)> _officerKeys = {};
+  final Map<String, FamilyCard> _familyCards = {};
 
   @override
   Future<void> close() async {}
@@ -21,6 +22,7 @@ class MemoryLedgerStore implements LedgerStore {
     _nodes.clear();
     _revocations.clear();
     _officerKeys.clear();
+    _familyCards.clear();
   }
 
   @override
@@ -146,5 +148,34 @@ class MemoryLedgerStore implements LedgerStore {
     List<int> privateKey,
   ) async {
     _officerKeys[officerId] = (publicKey, privateKey);
+  }
+
+  @override
+  Future<void> upsertFamilyCard(FamilyCard card) async {
+    _familyCards[card.familyId] = card;
+  }
+
+  @override
+  Future<FamilyCard?> familyCard(String familyId) async =>
+      _familyCards[familyId];
+
+  @override
+  Future<List<FamilyCard>> familyCards() async => _familyCards.values.toList();
+
+  @override
+  Future<double> familyUsedUnits(String familyId, int dayStartEpoch) async {
+    final day = dayStartEpoch ~/ 86400;
+    double used = 0;
+    for (final r in _records) {
+      if (r.familyId == familyId && r.claimedAt ~/ 86400 == day) {
+        used += r.claimUnits;
+      }
+    }
+    for (final r in _syncRecords) {
+      if (r.familyId == familyId && r.claimedAt ~/ 86400 == day) {
+        used += r.claimUnits;
+      }
+    }
+    return used;
   }
 }

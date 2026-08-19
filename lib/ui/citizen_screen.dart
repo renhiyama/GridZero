@@ -60,6 +60,11 @@ class _CitizenScreenState extends State<CitizenScreen> {
                 ),
                 const SizedBox(height: 12),
                 HudPanel(
+                  title: 'IDENTITY CARD  /  TIER-1 + TIER-2',
+                  child: _IdentityCard(app: app),
+                ),
+                const SizedBox(height: 12),
+                HudPanel(
                   title: 'DYNAMIC RATION QR  /  TOKEN ROTATES ${secondsLeft}s',
                   child: _DynamicQr(app: app, secondsLeft: secondsLeft),
                 ),
@@ -286,6 +291,121 @@ class _NeedToggle extends StatelessWidget {
             fontSize: 11,
             fontWeight: on ? FontWeight.bold : FontWeight.normal,
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _IdentityCard extends StatelessWidget {
+  const _IdentityCard({required this.app});
+
+  final dynamic app;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = AppPalette.of(context);
+    final name = (app.username as String).isNotEmpty
+        ? app.username as String
+        : app.citizenId as String;
+    final initials = name
+        .split(' ')
+        .where((s) => s.isNotEmpty)
+        .take(2)
+        .map((s) => s[0].toUpperCase())
+        .join();
+    final pinSet = app.pinHash != null;
+    final famId = app.familyId;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Container(
+              width: 52,
+              height: 52,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                border: Border.all(color: p.primary, width: 2),
+                color: p.primary.withValues(alpha: 0.12),
+              ),
+              child: Text(
+                initials,
+                style: TextStyle(
+                  color: p.primary,
+                  fontFamily: 'monospace',
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    name,
+                    style: TextStyle(
+                      color: p.text,
+                      fontFamily: 'monospace',
+                      fontSize: 15,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    app.citizenId,
+                    style: TextStyle(
+                      color: p.textDim,
+                      fontFamily: 'monospace',
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            _Badge(
+              label: pinSet ? 'PIN SET' : 'NO PIN',
+              color: pinSet ? p.primary : p.textDim,
+            ),
+            const SizedBox(width: 8),
+            if (famId != null)
+              _Badge(label: 'FAMILY $famId', color: p.secondary),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+class _Badge extends StatelessWidget {
+  const _Badge({required this.label, required this.color});
+
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        border: Border.all(color: color),
+        color: color.withValues(alpha: 0.10),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          color: color,
+          fontFamily: 'monospace',
+          fontSize: 10,
+          letterSpacing: 1,
         ),
       ),
     );

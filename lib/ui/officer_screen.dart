@@ -3,6 +3,7 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -281,34 +282,130 @@ class _ScanTab extends StatefulWidget {
 
 class _ScanTabState extends State<_ScanTab> {
   final _ctrl = TextEditingController();
+  final _pinCtrl = TextEditingController();
   String _rationCode = 'Rice';
+  double _units = 1.0;
+  bool _pinFallback = false;
   String? _lastCitizenId;
 
   static const _items = ['Rice', 'Water', 'Blanket', 'Medicine', 'Fuel'];
+  static const _unitOptions = [0.25, 0.5, 0.75, 1.0];
 
   @override
   void dispose() {
     _ctrl.dispose();
+    _pinCtrl.dispose();
     super.dispose();
   }
 
-  Future<ClaimResult> _claim(String payload) =>
-      widget.app.claimFromPayload(payload, _rationCode);
+  Future<ClaimResult> _claim(String payload) => widget.app.claimFromPayload(
+    payload,
+    _rationCode,
+    claimUnits: _units,
+    fallbackPin: _pinFallback ? _pinCtrl.text.trim() : null,
+  );
 
-  void _showClaimResult(ClaimResult result) {
+  /// The claim QR's `n` (display name) for the visual identity popup.
+  String? _displayName(String payload) {
+    try {
+      final map = jsonDecode(payload);
+      return map is Map<String, dynamic> ? map['n'] as String? : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _showClaimResult(ClaimResult result, String payload) async {
     final p = AppPalette.of(context);
     widget.onResult(result);
     if (result.ok) {
       _lastCitizenId = result.record!.citizenId;
+      final name = _displayName(payload);
+      if (name != null) {
+        await _showIdentityCard(result.record!.citizenId, name);
+        if (!mounted) return;
+      }
     }
     if (!mounted) return;
+    final units = result.record?.claimUnits ?? _units;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         backgroundColor: result.ok ? p.primary : p.error,
         content: Text(
           result.ok
-              ? 'GRANTED: ${result.record!.citizenId} / ${result.record!.rationCode}'
+              ? 'GRANTED ${units.toStringAsFixed(2)}U: '
+                    '${result.record!.citizenId} / ${result.record!.rationCode}'
               : result.message,
+        ),
+      ),
+    );
+  }
+
+  /// Photo popup: the citizen's identity card rendered from the claim QR
+  /// (initials avatar + name) for a visual person check, used on the
+  /// PIN-fallback path where the rotating token could not be trusted.
+  Future<void> _showIdentityCard(String citizenId, String name) {
+    final p = AppPalette.of(context);
+    final initials = name
+        .split(' ')
+        .where((s) => s.isNotEmpty)
+        .take(2)
+        .map((s) => s[0].toUpperCase())
+        .join();
+    return showDialog<void>(
+      context: context,
+      builder: (context) => Dialog(
+        backgroundColor: p.panel,
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 84,
+                height: 84,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(color: p.primary, width: 2),
+                  color: p.primary.withValues(alpha: 0.12),
+                ),
+                child: Text(
+                  initials,
+                  style: TextStyle(
+                    color: p.primary,
+                    fontFamily: 'monospace',
+                    fontSize: 30,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                name,
+                style: TextStyle(
+                  color: p.text,
+                  fontFamily: 'monospace',
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                citizenId,
+                style: TextStyle(
+                  color: p.textDim,
+                  fontFamily: 'monospace',
+                  fontSize: 12,
+                ),
+              ),
+              const SizedBox(height: 16),
+              FilledButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('CONFIRM IDENTITY'),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -365,7 +462,7 @@ class _ScanTabState extends State<_ScanTab> {
                 ),
               );
               if (payload == null) return;
-              _showClaimResult(await _claim(payload));
+              _showClaimResult(await _claim(payload), payload);
             },
             icon: const Icon(Icons.qr_code_scanner),
             label: const Text(
@@ -392,12 +489,112 @@ class _ScanTabState extends State<_ScanTab> {
             FilledButton(
               onPressed: () async {
                 if (_ctrl.text.trim().isNotEmpty) {
-                  _showClaimResult(await _claim(_ctrl.text.trim()));
+                  _showClaimResult(
+                    await _claim(_ctrl.text.trim()),
+                    _ctrl.text.trim(),
+                  );
                 }
               },
               child: const Text('CLAIM'),
             ),
           ],
+        ),
+        const SizedBox(height: 12),
+        HudPanel(
+          title: 'CLAIM UNITS / FALLBACK',
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Text(
+                    'UNITS',
+                    style: TextStyle(
+                      color: p.textDim,
+                      fontFamily: 'monospace',
+                      fontSize: 11,
+                    ),
+                  ),
+                  const Spacer(),
+                  DropdownButton<double>(
+                    value: _units,
+                    dropdownColor: p.panel,
+                    style: TextStyle(color: p.primary, fontFamily: 'monospace'),
+                    items: _unitOptions
+                        .map(
+                          (u) => DropdownMenuItem(
+                            value: u,
+                            child: Text(u.toStringAsFixed(2)),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (v) => setState(() => _units = v ?? 1.0),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Text(
+                    'PIN FALLBACK',
+                    style: TextStyle(
+                      color: p.textDim,
+                      fontFamily: 'monospace',
+                      fontSize: 11,
+                    ),
+                  ),
+                  const Spacer(),
+                  Switch(
+                    value: _pinFallback,
+                    activeTrackColor: p.primary,
+                    onChanged: (v) => setState(() => _pinFallback = v),
+                  ),
+                ],
+              ),
+              if (_pinFallback) ...[
+                const SizedBox(height: 8),
+                TextField(
+                  controller: _pinCtrl,
+                  obscureText: true,
+                  keyboardType: TextInputType.number,
+                  maxLength: 6,
+                  style: const TextStyle(fontFamily: 'monospace'),
+                  decoration: const InputDecoration(
+                    labelText: 'CITIZEN KNOWLEDGE PIN',
+                    counterText: '',
+                    border: UnderlineInputBorder(),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        OutlinedButton.icon(
+          onPressed: () async {
+            final payload = await Navigator.of(context).push<String>(
+              MaterialPageRoute(
+                builder: (_) => _scannerPageFor('FAMILY CARD QR'),
+              ),
+            );
+            if (payload == null || !context.mounted) return;
+            final check = await widget.app.enlistFamily(payload);
+            if (!context.mounted) return;
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                backgroundColor: check.ok ? p.primary : p.error,
+                content: Text(
+                  check.ok
+                      ? 'FAMILY CARD ${check.card!.familyId} CACHED '
+                            '(${check.card!.dailyUnits.toStringAsFixed(0)}U/day, '
+                            '${check.card!.memberCitizenIds.length} members)'
+                      : check.message,
+                ),
+              ),
+            );
+          },
+          icon: const Icon(Icons.group_add),
+          label: const Text('ENLIST FAMILY CARD'),
         ),
         const SizedBox(height: 12),
         if (_lastCitizenId != null) ...[

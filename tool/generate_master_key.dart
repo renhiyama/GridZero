@@ -43,8 +43,7 @@ Uint8List _derInteger(BigInt value) {
 }
 
 Uint8List _derSequence(List<Uint8List> members) {
-  final body = members.fold<List<int>>(
-      [], (acc, m) => [...acc, ...m]);
+  final body = members.fold<List<int>>([], (acc, m) => [...acc, ...m]);
   final len = _derLength(body.length);
   return Uint8List.fromList([0x30, ...len, ...body]);
 }
@@ -62,22 +61,35 @@ String _pemEncode(String label, Uint8List der) {
 String _canonical(String officerId, int issuedAt) =>
     'v=1|officer_id=$officerId|issued_at=$issuedAt';
 
+String _familyCanonical(
+  String familyId,
+  String rationCode,
+  double dailyUnits,
+  List<String> members,
+) =>
+    'v=1|kind=family|family_id=$familyId|ration_code=$rationCode'
+    '|daily_units=${dailyUnits.toStringAsFixed(2)}'
+    '|member_ids=${members.join(',')}';
+
 void main() {
   final random = FortunaRandom()
-    ..seed(KeyParameter(
-        Uint8List.fromList(List<int>.generate(32, (i) => i + 1))));
+    ..seed(
+      KeyParameter(Uint8List.fromList(List<int>.generate(32, (i) => i + 1))),
+    );
   final keyGen = RSAKeyGenerator()
-    ..init(ParametersWithRandom(
-      RSAKeyGeneratorParameters(_publicExponent, 2048, 64),
-      random,
-    ));
+    ..init(
+      ParametersWithRandom(
+        RSAKeyGeneratorParameters(_publicExponent, 2048, 64),
+        random,
+      ),
+    );
   final pair = keyGen.generateKeyPair();
   final publicKey = pair.publicKey;
   final privateKey = pair.privateKey;
 
   final pubDer = _derSequence([
     _derInteger(publicKey.modulus!),
-    _derInteger(publicKey.exponent!)
+    _derInteger(publicKey.exponent!),
   ]);
   final pem = _pemEncode('PUBLIC KEY', pubDer);
   File('assets/officer_pubkey.pem').writeAsStringSync('$pem\n');
@@ -88,7 +100,9 @@ void main() {
 
   final signer = RSASigner(SHA256Digest(), '0609608648016503040201')
     ..init(true, PrivateKeyParameter<RSAPrivateKey>(privateKey));
-  final signature = signer.generateSignature(utf8.encode(_canonical(officerId, issuedAt)));
+  final signature = signer.generateSignature(
+    utf8.encode(_canonical(officerId, issuedAt)),
+  );
 
   final payload = jsonEncode({
     'v': 1,
@@ -102,4 +116,27 @@ void main() {
   stdout.writeln('');
   stdout.writeln('MASTER_KEY_PAYLOAD:');
   stdout.writeln(payload);
+
+  // Tier-2 family card, signed with the same HQ key. Replace the FAM-.. and
+  // member ids with real ones; the officer terminal caches whatever it scans.
+  final familyId = 'FAM-DEADBEEF';
+  final memberIds = ['CIT-00000001', 'CIT-00000002'];
+  final familySigner = RSASigner(SHA256Digest(), '0609608648016503040201')
+    ..init(true, PrivateKeyParameter<RSAPrivateKey>(privateKey));
+  final familySignature = familySigner.generateSignature(
+    utf8.encode(_familyCanonical(familyId, 'Rice', 4.0, memberIds)),
+  );
+  final familyPayload = jsonEncode({
+    'v': 1,
+    'kind': 'family',
+    'family_id': familyId,
+    'ration_code': 'Rice',
+    'daily_units': 4.0,
+    'member_ids': memberIds,
+    'issued_at': issuedAt,
+    'sig': base64Encode(familySignature.bytes),
+  });
+  stdout.writeln('');
+  stdout.writeln('FAMILY_CARD_PAYLOAD:');
+  stdout.writeln(familyPayload);
 }

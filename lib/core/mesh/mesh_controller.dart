@@ -10,12 +10,13 @@ import 'dart:async';
 import 'dart:math';
 import 'dart:typed_data';
 
-import 'package:flutter/foundation.dart';
 
+import 'package:flutter/foundation.dart';
 import '../mesh_packet.dart';
 import '../nonce_dedup.dart';
 import 'bluez_mesh.dart';
 import 'mesh_adapter.dart';
+import 'win_mesh_adapter.dart';
 import 'mesh_node.dart';
 import 'native_mesh.dart';
 
@@ -242,6 +243,9 @@ class MeshController {
   static MeshAdapter _pickAdapter() {
     return switch (defaultTargetPlatform) {
       TargetPlatform.linux => BluezMeshAdapter(
+        advertisingPayload: Uint8List(meshPacketLength),
+      ) as MeshAdapter,
+      TargetPlatform.windows => WinMeshAdapter(
         advertisingPayload: Uint8List(meshPacketLength),
       ) as MeshAdapter,
       _ => NativeMeshAdapter(advertisingPayload: Uint8List(meshPacketLength)),

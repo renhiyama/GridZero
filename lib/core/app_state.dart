@@ -33,8 +33,29 @@ import 'totp.dart';
 import 'db_sync.dart';
 import 'dart:io' show NetworkInterface;
 
-import 'linux_network.dart' as nmcli;
-import 'linux_network.dart' show kLinkApGateway;
+import 'linux_network.dart' as linux_net;
+import 'windows_network.dart' as win_net;
+import 'linux_network.dart' show kLinkApGateway, SavedConnection;
+import 'mesh/win_mesh_adapter.dart';
+
+bool get _isWindows => defaultTargetPlatform == TargetPlatform.windows;
+Future<String?> _startLinkAp({required String ssid, required String pass}) =>
+    _isWindows ? win_net.startLinkAp(ssid: ssid, pass: pass) : linux_net.startLinkAp(ssid: ssid, pass: pass);
+Future<void> _stopLinkAp() => _isWindows ? win_net.stopLinkAp() : linux_net.stopLinkAp();
+Future<List<String>> _visibleWifiNetworks() =>
+    _isWindows ? win_net.visibleWifiNetworks() : linux_net.visibleWifiNetworks();
+Future<List<SavedConnection>> _activeConnections() =>
+    _isWindows ? win_net.activeConnections() : linux_net.activeConnections();
+Future<String?> _connectWifi(String ssid, String pass) =>
+    _isWindows ? win_net.connectWifi(ssid, pass) : linux_net.connectWifi(ssid, pass);
+Future<List<String>> _restoreConnections(List<SavedConnection> c) =>
+    _isWindows ? win_net.restoreConnections(c) : linux_net.restoreConnections(c);
+Future<String?> _activeWifiConnectionName() =>
+    _isWindows ? win_net.activeWifiConnectionName() : linux_net.activeWifiConnectionName();
+Future<String?> _connectionGateway(String name) =>
+    _isWindows ? win_net.connectionGateway(name) : linux_net.connectionGateway(name);
+Future<void> _disconnectConnection(String name) =>
+    _isWindows ? win_net.disconnectConnection(name) : linux_net.disconnectConnection(name);
 
 enum Role { citizen, officer, admin }
 
@@ -1234,6 +1255,9 @@ class AppState extends ChangeNotifier {
       TargetPlatform.linux => BluezMeshAdapter(
         advertisingPayload: Uint8List(meshPacketLength),
       ) as MeshAdapter,
+      TargetPlatform.windows => WinMeshAdapter(
+        advertisingPayload: Uint8List(meshPacketLength),
+      ) as MeshAdapter,
       _ => _nativeAdapter(nodeId),
     };
     return MeshController(nodeId: nodeId, adapter: adapter);
@@ -2137,7 +2161,7 @@ class AppState extends ChangeNotifier {
     }
     onStep?.call('BRINGING UP LINK');
     final otp = generateLinkOtp(Random.secure());
-    final error = await nmcli.startLinkAp(
+    final error = await _startLinkAp(
       ssid: linkSsidFor(name),
       pass: otp,
     );
@@ -2160,12 +2184,12 @@ class AppState extends ChangeNotifier {
       },
     );
     if (server == null) {
-      await nmcli.stopLinkAp();
+      await _stopLinkAp();
       return 'could not open sync server';
     }
     _stopSyncServer = () async {
       await server.cancel();
-      await nmcli.stopLinkAp();
+      await _stopLinkAp();
     };
     notifyListeners();
     return null;
@@ -2188,8 +2212,8 @@ class AppState extends ChangeNotifier {
   /// HQ side: visible hosted links from the laptop's own wifi scan.
   /// Returns usernames (SSID prefix 'GZ-' stripped).
   Future<List<String>> visibleLinkPeers() async {
-    if (defaultTargetPlatform != TargetPlatform.linux) return const [];
-    final ssids = await nmcli.visibleWifiNetworks();
+    if (defaultTargetPlatform != TargetPlatform.linux && defaultTargetPlatform != TargetPlatform.windows) return const [];
+    final ssids = await _visibleWifiNetworks();
     return ssids
         .where((s) => s.startsWith('GZ-'))
         .map((s) => s.substring(3))
@@ -2230,25 +2254,25 @@ class AppState extends ChangeNotifier {
     // there (otherwise HQ could be left stranded on the device's link).
     // Empty list is a valid state: the laptop may be online via ethernet
     // only or not connected at all; nothing to restore then.
-    final saved = await nmcli.activeConnections();
+    final saved = await _activeConnections();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(
       _kPreSyncNetworksPref,
       jsonEncode([for (final c in saved) {'name': c.name, 'type': c.type}]),
     );
     step('ESTABLISHING SECURE LINK');
-    final error = await nmcli.connectWifi(ssid, password);
+    final error = await _connectWifi(ssid, password);
     if (error != null) {
-      await nmcli.restoreConnections(saved);
+      await _restoreConnections(saved);
       await prefs.remove(_kPreSyncNetworksPref);
       return error;
     }
     try {
       step('EXCHANGING DATA');
-      final wifiCon = await nmcli.activeWifiConnectionName();
+      final wifiCon = await _activeWifiConnectionName();
       final gateway = wifiCon == null
           ? null
-          : await nmcli.connectionGateway(wifiCon);
+          : await _connectionGateway(wifiCon);
       if (gateway == null) {
         return 'link established but could not resolve the peer address';
       }
@@ -2267,9 +2291,9 @@ class AppState extends ChangeNotifier {
       }
       return null;
     } finally {
-      final wifiCon = await nmcli.activeWifiConnectionName();
-      if (wifiCon != null) await nmcli.disconnectConnection(wifiCon);
-      await nmcli.restoreConnections(saved);
+      final wifiCon = await _activeWifiConnectionName();
+      if (wifiCon != null) await _disconnectConnection(wifiCon);
+      await _restoreConnections(saved);
       await prefs.remove(_kPreSyncNetworksPref);
     }
   }
@@ -2301,7 +2325,7 @@ class AppState extends ChangeNotifier {
     }
     for (final (name, _) in saved) {
       try {
-        await nmcli.restoreConnections([(name: name, type: 'wifi')]);
+        await _restoreConnections([(name: name, type: 'wifi')]);
       } catch (_) {
         // Best-effort: a stale network may no longer exist.
       }

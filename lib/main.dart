@@ -1,12 +1,12 @@
 import 'dart:developer' as developer;
-import 'dart:typed_data';
-
 import 'package:dynamic_color/dynamic_color.dart';
 import 'package:flutter/material.dart';
 
 import 'app_scope.dart';
 import 'core/app_state.dart';
+import 'package:flutter/foundation.dart';
 import 'core/mesh/native_mesh.dart';
+import 'core/mesh/win_mesh_adapter.dart';
 import 'core/mesh_packet.dart';
 import 'core/notifications.dart';
 import 'ui/hud_theme.dart';
@@ -16,8 +16,12 @@ import 'ui/shell.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  AppState.nativeAdapterFactory = (nodeId) =>
-      NativeMeshAdapter(advertisingPayload: Uint8List(meshPacketLength));
+  AppState.nativeAdapterFactory = (nodeId) {
+    if (defaultTargetPlatform == TargetPlatform.windows) {
+      return WinMeshAdapter(advertisingPayload: Uint8List(meshPacketLength));
+    }
+    return NativeMeshAdapter(advertisingPayload: Uint8List(meshPacketLength));
+  };
 
   final state = AppState();
   // Paint the boot splash BEFORE the slow radio/db bring-up so the phone

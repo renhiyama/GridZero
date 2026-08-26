@@ -14,6 +14,7 @@ import 'package:permission_handler/permission_handler.dart';
 
 import '../core/provision_packet.dart';
 import 'linux_qr_scan_page.dart';
+import 'windows_qr_scan_page.dart';
 
 class ProvisionScanPage extends StatefulWidget {
   const ProvisionScanPage({
@@ -49,7 +50,8 @@ class _ProvisionScanPageState extends State<ProvisionScanPage> {
   }
 
   Future<void> _requestCamera() async {
-    if (defaultTargetPlatform == TargetPlatform.linux) {
+    if (defaultTargetPlatform == TargetPlatform.linux ||
+        defaultTargetPlatform == TargetPlatform.windows) {
       if (mounted) setState(() => _cameraGranted = true);
       return;
     }
@@ -121,9 +123,11 @@ class _ProvisionScanPageState extends State<ProvisionScanPage> {
     final progress = _total == null
         ? widget.hint
         : 'SCANNED ${_received.clamp(1, _total!)} OF $_total';
-    final body = defaultTargetPlatform == TargetPlatform.linux
-        ? LinuxQrScanPage(onScan: _onScan)
-        : _MobileScan(onScan: _onScan, enabled: _cameraGranted);
+    final body = switch (defaultTargetPlatform) {
+      TargetPlatform.linux => LinuxQrScanPage(onScan: _onScan),
+      TargetPlatform.windows => WindowsQrScanPage(onScan: _onScan),
+      _ => _MobileScan(onScan: _onScan, enabled: _cameraGranted),
+    };
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(title: Text(widget.label)),

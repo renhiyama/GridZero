@@ -1,0 +1,22 @@
+#!/bin/bash
+set -e
+# Re-apply all GridZero pub-cache patches after `flutter pub get` wipes them.
+# Idempotent — safe to run twice. See docs/PATCHES.md for rationale.
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+echo "[patch] GridZero pub-cache patches — see docs/PATCHES.md"
+
+echo "[patch] 1/3 flutter_lite_camera 0.1.0 RestartCapture (linux/CameraLinux.cpp)..."
+python3 "$ROOT/tool/patches/apply_lite_camera_patch.py" 2>&1 | sed 's/^/[patch] /'
+
+echo "[patch] 2/3 wifi_iot 0.3.19+2 android/build.gradle (jcenter strip)..."
+python3 "$ROOT/tool/patches/apply_wifi_iot_patch.py" 2>&1 | sed 's/^/[patch] /'
+
+echo "[patch] 3/3 ble_peripheral_plus 2.5.4 windows BLE advertise (BluetoothLEAdvertisementPublisher)..."
+python3 "$ROOT/tool/patches/apply_windows_ble_patch.py" 2>&1 | sed 's/^/[patch] /'
+
+# flutter_litert 3.8.0 currently needs no patch; probe and warn if stale
+if grep -q "jcenter" "$HOME/.pub-cache/hosted/pub.dev/flutter_litert-3.8.0/android/build.gradle" 2>/dev/null; then
+  echo "[patch] WARN: flutter_litert still references jcenter — manual inspect docs/PATCHES.md"
+fi
+
+echo "[patch] done. Verify: flutter analyze && flutter test"

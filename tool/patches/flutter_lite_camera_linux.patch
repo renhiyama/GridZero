@@ -1,0 +1,129 @@
+--- a/linux/include/Camera.h
++++ b/linux/include/Camera.h
+@@ -107,6 +107,11 @@
+     std::vector<MediaTypeInfo> ListSupportedMediaTypes();
+     FrameData CaptureFrame();
+     bool SetResolution(int width, int height);
+ 
++    // GRIDZERO PATCH (see CameraLinux.cpp SetResolution): STREAMOFF ->
++    // S_FMT -> requeue -> STREAMON, since VIDIOC_S_FMT returns EBUSY while
++    // the stream Open() left running is active.
++    bool RestartCapture();
++
+     // Starts a background thread that continuously grabs frames, caches the
+     // latest one for CaptureFrame(), and forwards every frame as RGBA to the
+     // given callback. Returns false if the camera is not open.
+--- a/linux/CameraLinux.cpp
++++ b/linux/CameraLinux.cpp
+@@ -200,6 +200,40 @@
+     return true;
+ }
+ 
++// GRIDZERO PATCH: Open() leaves STREAMON active and VIDIOC_S_FMT fails with
++// EBUSY while streaming, so renegotiating a resolution needs a full
++// stop -> set -> requeue -> restart cycle. Upstream only did the S_FMT.
++bool Camera::RestartCapture()
++{
++    // STREAMOFF hands every mmap'd buffer back; requeue them or the first
++    // DQBUF after STREAMON would block forever.
++    for (unsigned int i = 0; i < bufferCount; ++i)
++    {
++        struct v4l2_buffer buf;
++        memset(&buf, 0, sizeof(buf));
++        buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
++        buf.memory = V4L2_MEMORY_MMAP;
++        buf.index = i;
++        if (ioctl(fd, VIDIOC_QBUF, &buf) < 0)
++        {
++            perror("Error requeuing buffer");
++            return false;
++        }
++    }
++    enum v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
++    return ioctl(fd, VIDIOC_STREAMON, &type) >= 0;
++}
++
+ bool Camera::SetResolution(int width, int height)
+ {
+     if (fd == -1)
+     {
+         std::cerr << "Device not opened." << std::endl;
+         return false;
+     }
+ 
+     struct v4l2_format fmt;
+     memset(&fmt, 0, sizeof(fmt));
+     fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+     fmt.fmt.pix.width = width;
+     fmt.fmt.pix.height = height;
+     fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_YUYV;
+ 
++    // Stop any background capture thread first so it cannot DQBUF mid-swap,
++    // then drop STREAMON for the format change.
++    StopCaptureLoop();
++    StopCapture();
++
++    if (ioctl(fd, VIDIOC_S_FMT, &fmt) < 0)
++    {
++        perror("Error setting resolution");
++        if (!RestartCapture())
++        {
++            std::cerr << "Failed to restore capture stream." << std::endl;
++        }
++        return false;
++    }
++
++    // Save the actual resolution set by the device
++    frameWidth = fmt.fmt.pix.width;
++    frameHeight = fmt.fmt.pix.height;
++
++    if (!RestartCapture())
++    {
++        std::cerr << "Failed to resume capture stream." << std::endl;
++        return false;
++    }
++
++    return true;
++}
++PATCH
+cat tool/patches/flutter_lite_camera_linux.patch | head -30
+echo "---"
+cat > tool/patches/wifi_iot_build_gradle.patch <<'PATCH'
+--- a/android/build.gradle
++++ b/android/build.gradle
+@@ -1,30 +1,15 @@
+-group 'com.alternadom.wifiiot'
+-version '1.0-SNAPSHOT'
+-
+-apply plugin: 'com.android.library'
+-
+-// upstream: jcenter() + AGP 8.2.0 classpath + allprojects injection
+-// GRIDZERO PATCH: strip to bare com.android.library, host AGP provides everything
+-
+-android {
+-    namespace 'com.alternadom.wifiiot'
+-    compileSdk 34
+-    defaultConfig {
+-        minSdkVersion 16
+-        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+-    }
+-    lintOptions {
+-        disable 'InvalidPackage'
+-    }
+-}
++group 'com.alternadom.wifiiot'
++version '1.0-SNAPSHOT'
++
++apply plugin: 'com.android.library'
++
++android {
++    namespace 'com.alternadom.wifiiot'
++    compileSdk 34
++    defaultConfig {
++        minSdkVersion 16
++        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
++    }
++    lintOptions {
++        disable 'InvalidPackage'
++    }
++}

@@ -30,6 +30,7 @@ class FakeMeshAdapter implements MeshAdapter {
   @override
   void boostScan() {}
 
+  @override
   String get name => 'FAKE';
 
   @override

@@ -1,0 +1,20 @@
+--- a/android/build.gradle  (upstream: jcenter + AGP classpath)
++++ b/android/build.gradle  (gridzero minimal)
+@@ -1 +1,16 @@
+-# upstream references jcenter() and buildscript classpath 8.2.0 — replaced
++group 'com.alternadom.wifiiot'
++version '1.0-SNAPSHOT'
++
++apply plugin: 'com.android.library'
++
++android {
++    namespace 'com.alternadom.wifiiot'
++    compileSdk 34
++    defaultConfig {
++        minSdkVersion 16
++        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
++    }
++    lintOptions {
++        disable 'InvalidPackage'
++    }
++}

@@ -9,14 +9,14 @@ Date: 2026-08-28. Basis: current `linux_network.dart` (500 lines, iw/hostapd/dns
 * Network HQ link: virtual `ap0` on `wlp1s0` (`iw dev ... interface add ap0 type __ap`), unmanaged via NM conf, `ip addr add 192.168.51.1/24`, UFW `allow in on ap0`, `hostapd + dnsmasq` on `/tmp/gridzero`, nft masquerade, DFS channel fallback (sta channel → g:6 → a:36), autoconnect disabled for ALL wifi profiles before STA disconnect, stale pid-file sweep.
 * Ledger/geo/compass: `sqflite_common_ffi` (cross-platform), `geolocator`, `flutter_compass`, `sensors_plus` — desktop variants exist but compass is mobile-only.
 
-## 2. Windows plugin matrix
+## 2. Windows plugin matrix (updated 2026-08-28)
 
 | Area | Linux dep | Windows counterpart | Status on Windows |
 |------|-----------|---------------------|-------------------|
 | BLE central (scan) | `bluez`+`dbus` | `flutter_blue_plus_winrt` (WinRT BluetoothLE) | ✅ Generated registrant already includes `FlutterBluePlusPlugin` on Windows. Works for scanning manufacturerData. |
-| BLE peripheral (adv) | `ble_peripheral_plus` | same plugin registers `BlePeripheralPluginCApi` on Windows but upstream adv is Android-only; WinRT `BluetoothLEAdvertisementPublisher` exists (Win10 1703+, requires `bluetooth` capability) and is NOT exposed by `ble_peripheral_plus` | ❌ No Dart API today. Need `win32`/`winrt` FFI publisher or accept scan-only HQ on Windows. |
-| Camera QR | `flutter_lite_camera` (Linux-only, V4L2) | `camera_windows` via `camera` package (MediaFoundation) + `mobile_scanner` has Windows support via `mobile_scanner_windows` | ✅ Replace with `camera` + zxing2 path for Windows. |
-| WiFi join | `nmcli` | `netsh wlan` (add profile XML + `netsh wlan connect name=SSID`) | ✅ Easy client path. |
+| BLE peripheral (adv) | `ble_peripheral_plus` | `ble_peripheral_plus` Windows `GattServiceProvider` path ignores manufacturerData — patched to `BluetoothLEAdvertisementPublisher` (Win10 10240+, `bluetooth` capability, 31B legacy / 254B extended). See `tool/patches/windows_ble_advertise_{h,cpp}.patch` + `lib/core/mesh/win_mesh_adapter.dart` (now full TX/RX, not scan-only). | ✅ Patched — `0xFFFF` + 18B mesh frames go on air. Re-apply via `tool/apply_patches.sh` after `pub get`. |
+| Camera QR | `flutter_lite_camera` (Linux-only, V4L2) | `camera_windows` via `camera` package (MediaFoundation) + `mobile_scanner` has Windows support via `mobile_scanner_windows` | ✅ `lib/ui/windows_qr_scan_page.dart` (MediaFoundation) routed via `ProvisionScanPage` on Windows. |
+| WiFi join | `nmcli` | `netsh wlan` (add profile XML + `netsh wlan connect name=SSID`) | ✅ `lib/core/windows_network.dart` client join already wired. |
 | WiFi hosted AP | `hostapd+dnsmasq+iw` | `netsh wlan set hostednetwork` (deprecated, driver-removed since 1803) OR WinRT `NetworkOperatorTetheringManager` (`Windows.Networking.NetworkOperators`, requires admin + `IsNoConnectionsTimeoutEnabled`) exposed via PowerShell `Start-Tethering` or `win32` WinRT | ⚠️ Feasible but admin-only, driver-dependent, and not available on all adapters. Most Windows 11 Intel AX cards still support TetheringManager; Realtek/USB often not. Recommend degrade to client-only on Windows unless admin hotspot explicitly requested. |
 | Firewall/NAT | `ufw`+`nft` | `netsh advfirewall` + `netsh interface portproxy` / ICS | Not needed if HQ is client (phone hosts). If HQ hosts via TetheringManager, Windows handles NAT/DHCP itself. |
 | Location/compass | `geolocator`, `flutter_compass` | `geolocator_windows` ✅, `flutter_compass` ❌ (returns error on Windows) | Compass HUD must hide/disable on Windows. |
@@ -40,15 +40,15 @@ No blocking build issue: `flutter create . --platforms=windows` already succeede
 * Paths: `/tmp/gridzero` → `%TEMP%\gridzero`, `/etc/NetworkManager/conf.d` has no equivalent.
 * `flutter_lite_camera` double-free/`listMediaTypes` bug is Linux-only; Windows camera path must not call it.
 
-## 5. Implementation plan (this PR)
+## 5. Implementation plan (this PR) — update
 
-1. Add `lib/core/windows_network.dart` exposing same surface as `linux_network.dart` but via `netsh`/`PowerShell`: `activeConnections`, `connectWifi`, `visibleWifiNetworks`, `startLinkAp` (returns hosted-not-supported hint), `stopLinkAp`, `kLinkApGateway` (reused).
-2. Add `lib/core/mesh/win_mesh_adapter.dart`: thin subclass of `NativeMeshAdapter` that skips `BlePeripheral` init on Windows, reports `ADV UNSUPPORTED (Windows)` in `status`/`diagnostics`, but keeps `broadcast()` as queued-noop so callers don't crash; scan still runs via `FlutterBluePlus`.
-3. Add `lib/ui/windows_qr_scan_page.dart`: `camera` controller → `capture` → zxing2 isolate, mirroring `linux_qr_scan_page.dart` API (`onScan` callback).
-4. Wire dispatch in `app_state.dart`/`mesh_controller.dart`/`main.dart` by `defaultTargetPlatform == TargetPlatform.windows` → windows_network / win mesh / windows QR page. Guard `linux_network.dart` imports so Windows build never shells `nmcli`.
-5. No DB/ledger changes. Compass HUD hides on Windows. Sync uses existing `db_sync.dart` TCP — already cross-platform.
+1. `lib/core/windows_network.dart` — netsh client join path done; `startLinkAp` returns hosted-not-supported hint (TetheringManager still TODO behind admin check).
+2. `lib/core/mesh/win_mesh_adapter.dart` — now full TX/RX: forwards `broadcast()` to `NativeMeshAdapter` → `BlePeripheral` → patched `BluetoothLEAdvertisementPublisher` path (manufacturerData 0xFFFF). No longer stub; `status`/`diagnostics` just proxy inner.
+3. `windows/ble_peripheral` C++ patch — `tool/patches/windows_ble_advertise_{h,cpp}.patch` adds `advertisementPublisher` + `Publisher_StatusChanged` + `IsAdvertising`/`StartAdvertising`/`StopAdvertising` branches. Apply via `tool/apply_patches.sh` (idempotent, rerun after `pub get`).
+4. `lib/ui/windows_qr_scan_page.dart` + `ProvisionScanPage` routing (linux→V4L2, windows→MediaFoundation, else mobile_scanner).
+5. Dispatch helpers in `app_state.dart` (`_isWindows` → `win_net`/`linux_net`) and `mesh_controller.dart`/`main.dart` pick `WinMeshAdapter` on Windows. No DB/ledger changes; `db_sync.dart` already cross-platform.
 
-Estimated effort: MVP (scan-only Windows HQ + netsh client) ~1 day; full WinRT adv publisher + TetheringManager host + installer elevation ~2–3 days extra.
+Next: WinRT `NetworkOperatorTetheringManager` hosted-AP (PowerShell `Start-Tethering`) + installer elevation when HQ must host.
 
 ## 6. Recommendation
 

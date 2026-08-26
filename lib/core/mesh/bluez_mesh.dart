@@ -59,7 +59,8 @@ class BluezMeshAdapter implements MeshAdapter {
     _scanWindow();
   }
 
-    String get name => 'BLUEZ';
+  @override
+  String get name => 'BLUEZ';
 
   @override
   Stream<MeshRxPacket> get onPacket => _rx.stream;

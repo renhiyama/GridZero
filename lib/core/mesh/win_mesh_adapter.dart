@@ -1,13 +1,17 @@
-/// Windows BLE mesh — scan via flutter_blue_plus_winrt, advertise stub.
+/// Windows BLE mesh — scan via flutter_blue_plus_winrt, advertise via
+/// patched ble_peripheral_plus (BluetoothLEAdvertisementPublisher).
 ///
-/// `ble_peripheral_plus` does not expose WinRT AdvertisementPublisher on
-/// Windows, so the HQ cannot advertise frames in MVP. The adapter still
-/// scans so HQ sees officer/citizen beacons and can sync over WiFi. All
-/// `broadcast()` calls are queued logicially but dropped with diagnostics so
-/// callers don't crash.
+/// The upstream plugin's Windows C++ used only GattServiceProvider and never
+/// published manufacturer data, so GridZero's 0xFFFF mesh frames never went
+/// on air. This adapter now forwards `broadcast()` to the inner
+/// NativeMeshAdapter, whose BlePeripheral calls go through the patched
+/// `ble_peripheral_plugin.cpp` (see tool/patches/windows_ble_advertise.patch).
+/// Without the patch it degrades to scan-only with a clear HUD hint.
 library;
+// ignore_for_file: unnecessary_import
 
 import 'dart:async';
+import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 
 import '../mesh_packet.dart';
@@ -19,7 +23,6 @@ class WinMeshAdapter implements MeshAdapter {
       : _inner = NativeMeshAdapter(advertisingPayload: advertisingPayload);
 
   final NativeMeshAdapter _inner;
-  bool _advStubWarned = false;
 
   @override
   String get name => 'WIN-BLE';
@@ -28,17 +31,13 @@ class WinMeshAdapter implements MeshAdapter {
   Stream<MeshRxPacket> get onPacket => _inner.onPacket;
 
   @override
-  String get status {
-    final inner = _inner.status;
-    return '$inner · ADV UNSUPPORTED (Windows — scan only, HQ joins via WiFi)';
-  }
+  String get status => _inner.status;
 
   @override
   Future<String> ensurePermissions() => _inner.ensurePermissions();
 
   @override
   Future<void> start() async {
-    // Start the inner but swallow peripheral init failures: scan still works.
     try {
       await _inner.start();
     } catch (e) {
@@ -47,14 +46,8 @@ class WinMeshAdapter implements MeshAdapter {
   }
 
   @override
-  Future<void> broadcast(MeshPacket packet, {bool persistent = false}) async {
-    if (!_advStubWarned) {
-      debugPrint('GridZero: Windows BLE advertise not supported — chat/landmark relay is receive-only on HQ. WiFi sync still works.');
-      _advStubWarned = true;
-    }
-    // No-op: keep queue semantics so callers think they broadcast, but don't
-    // throw. Landing in WiFi sync instead keeps HQ useful.
-  }
+  Future<void> broadcast(MeshPacket packet, {bool persistent = false}) =>
+      _inner.broadcast(packet, persistent: persistent);
 
   @override
   Future<void> injectRemote(MeshPacket packet) => _inner.injectRemote(packet);
@@ -69,11 +62,7 @@ class WinMeshAdapter implements MeshAdapter {
   void boostScan() => _inner.boostScan();
 
   @override
-  Map<String, String> get diagnostics => {
-        ..._inner.diagnostics,
-        'winAdv': 'UNSUPPORTED — scan only (HQ sync via WiFi)',
-        'winHint': 'Run phone-hosted GZ- link for Windows HQ',
-      };
+  Map<String, String> get diagnostics => _inner.diagnostics;
 
   @override
   Future<void> stop() => _inner.stop();

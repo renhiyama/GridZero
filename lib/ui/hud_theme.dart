@@ -1,12 +1,15 @@
 /// OLED cyber-industrial HUD theme (FEAT-UI-01).
 ///
 /// Structure (grid lines, 1px borders, monospace, glowing halos) is fixed;
-/// the accent palette is generated from a user-selected seed colour — either
+/// the accent palette is generated from a user-selected seed colour: either
 /// the platform's Material You colour (Android 12+) or a manual pick. Only
 /// the accent set changes, not full Material You theming.
 library;
 
 import 'package:flutter/material.dart';
+import 'package:qr_flutter/qr_flutter.dart';
+
+import '../core/provision_packet.dart';
 
 /// Resolved palette for the current theme/brightness. Widgets read this via
 /// [AppPalette.of] instead of hard-coding the original green.
@@ -45,10 +48,16 @@ class AppPalette {
       panel: dark ? const Color(0xFF04120C) : const Color(0xFFEAF4EF),
       grid: dark ? const Color(0xFF0A2A1C) : const Color(0xFFCFE3D8),
       text: dark ? const Color(0xFFBFEED9) : const Color(0xFF0B2218),
-      textDim: dark ? const Color(0xFF4E7A64) : const Color(0xFF5C7A6C),
+      textDim: dark ? const Color(0xFF5F967D) : const Color(0xFF5C7A6C),
     );
   }
 }
+
+/// Foreground colour that stays legible on a solid [bg] fill. Hard-coding
+/// white on the pastel `error` colour of the dark palette washes out, so
+/// buttons/banners pick dark text on bright fills and white on dark ones.
+Color onColor(Color bg) =>
+    bg.computeLuminance() > 0.45 ? const Color(0xFF00120B) : Colors.white;
 
 /// Default seed used before any user selection (legacy GridZero green).
 const Color kDefaultSeed = Color(0xFF00FF9C);
@@ -133,6 +142,105 @@ abstract final class HudTheme {
   }
 }
 
+/// Themed QR code: modules and eyes in the accent, background in the app
+/// backdrop, bordered instead of the stock white-on-black block. Keeps enough
+/// module/background contrast to scan in both brightness modes.
+class HudQr extends StatelessWidget {
+  const HudQr({super.key, required this.data, this.size = 150});
+
+  final String data;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = AppPalette.of(context);
+    return Container(
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        border: Border.all(color: p.primaryDim),
+        color: p.bg,
+      ),
+      child: QrImageView(
+        data: data,
+        version: QrVersions.auto,
+        size: size,
+        backgroundColor: p.bg,
+        eyeStyle: QrEyeStyle(eyeShape: QrEyeShape.square, color: p.primary),
+        dataModuleStyle: QrDataModuleStyle(
+          dataModuleShape: QrDataModuleShape.square,
+          color: p.primary,
+        ),
+      ),
+    );
+  }
+}
+
+/// Paged QR viewer for payloads too long for one readable frame. Splits the
+/// payload with [provisionChunks] and steps through one frame per page so a
+/// phone camera sees a low-version QR instead of an unreadable dense block.
+class HudPagedQr extends StatefulWidget {
+  const HudPagedQr({super.key, required this.payload, this.size = 220});
+
+  final String payload;
+  final double size;
+
+  @override
+  State<HudPagedQr> createState() => _HudPagedQrState();
+}
+
+class _HudPagedQrState extends State<HudPagedQr> {
+  late final List<String> _frames = provisionChunks(widget.payload);
+  int _page = 0;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = AppPalette.of(context);
+    final single = _frames.length == 1;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Center(child: HudQr(data: _frames[_page], size: widget.size)),
+        if (!single) ...[
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              IconButton(
+                onPressed: _page == 0
+                    ? null
+                    : () => setState(() => _page--),
+                icon: const Icon(Icons.chevron_left),
+                visualDensity: VisualDensity.compact,
+              ),
+              // Flexible so the counter shrinks instead of overflowing when
+              // the viewer sits in a narrow popup (e.g. directory dialogs).
+              Flexible(
+                child: Text(
+                  'SCAN QR ${_page + 1} OF ${_frames.length}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: p.primary,
+                    fontFamily: 'monospace',
+                    fontSize: 12,
+                    letterSpacing: 1,
+                  ),
+                ),
+              ),
+              IconButton(
+                onPressed: _page >= _frames.length - 1
+                    ? null
+                    : () => setState(() => _page++),
+                icon: const Icon(Icons.chevron_right),
+                visualDensity: VisualDensity.compact,
+              ),
+            ],
+          ),
+        ],
+      ],
+    );
+  }
+}
+
 /// Structural 1px bordered panel with a glowing top rule.
 class HudPanel extends StatelessWidget {
   const HudPanel({
@@ -165,16 +273,22 @@ class HudPanel extends StatelessWidget {
         children: [
           if (title != null) ...[
             Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Container(width: 6, height: 6, color: color),
+                Padding(
+                  padding: const EdgeInsets.only(top: 3),
+                  child: Container(width: 6, height: 6, color: color),
+                ),
                 const SizedBox(width: 6),
-                Text(
-                  title!,
-                  style: TextStyle(
-                    color: color,
-                    fontSize: 12,
-                    letterSpacing: 2,
-                    fontWeight: FontWeight.bold,
+                Flexible(
+                  child: Text(
+                    title!,
+                    style: TextStyle(
+                      color: color,
+                      fontSize: 12,
+                      letterSpacing: 2,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                 ),
               ],
@@ -183,6 +297,43 @@ class HudPanel extends StatelessWidget {
           ],
           child,
         ],
+      ),
+    );
+  }
+}
+
+/// Scrollable page body that keeps its content a readable column on desktop
+/// instead of stretching across a wide monitor: narrow windows fill the whole
+/// width, wider ones centre the column at [maxWidth].
+class HudScroll extends StatelessWidget {
+  const HudScroll({
+    super.key,
+    required this.children,
+    this.maxWidth = 760,
+    this.padding = const EdgeInsets.all(12),
+  });
+
+  final List<Widget> children;
+  final double maxWidth;
+  final EdgeInsets padding;
+
+  @override
+  Widget build(BuildContext context) {
+    Widget column = Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: children,
+    );
+    return SingleChildScrollView(
+      padding: padding,
+      child: LayoutBuilder(
+        builder: (context, constraints) => constraints.maxWidth <= maxWidth + 48
+            ? column
+            : Center(
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(maxWidth: maxWidth),
+                  child: column,
+                ),
+              ),
       ),
     );
   }

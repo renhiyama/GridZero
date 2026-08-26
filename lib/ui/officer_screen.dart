@@ -7,16 +7,16 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:mobile_scanner/mobile_scanner.dart';
-import 'package:permission_handler/permission_handler.dart';
 
 import '../app_scope.dart';
 import '../core/app_state.dart';
 import '../core/ledger/ledger_store.dart';
 import '../core/mesh_packet.dart';
+import '../core/provision_packet.dart';
+import 'package:latlong2/latlong.dart';
 import 'hud_theme.dart';
-import 'linux_qr_scan_page.dart';
 import 'mesh_map.dart';
+import 'provision_scan_page.dart';
 
 class OfficerScreen extends StatefulWidget {
   const OfficerScreen({super.key});
@@ -42,7 +42,7 @@ class _OfficerScreenState extends State<OfficerScreen> {
       child: app.officerId == null
           ? _EnlistGate(app: app, cameraUsable: _cameraUsable)
           : DefaultTabController(
-              length: 3,
+              length: 4,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
@@ -70,11 +70,6 @@ class _OfficerScreenState extends State<OfficerScreen> {
                           ),
                         ),
                         const Spacer(),
-                        IconButton(
-                          onPressed: () => app.switchRole(Role.citizen),
-                          icon: Icon(Icons.logout, color: p.textDim, size: 18),
-                          tooltip: 'Return to citizen mode',
-                        ),
                       ],
                     ),
                   ),
@@ -83,6 +78,7 @@ class _OfficerScreenState extends State<OfficerScreen> {
                       Tab(text: 'SCAN'),
                       Tab(text: 'LEDGER'),
                       Tab(text: 'MAP'),
+                      Tab(text: 'SYNC'),
                     ],
                   ),
                   Expanded(
@@ -95,6 +91,7 @@ class _OfficerScreenState extends State<OfficerScreen> {
                         ),
                         _LedgerTab(app: app),
                         _MapTab(app: app),
+                        _SyncTab(app: app),
                       ],
                     ),
                   ),
@@ -116,12 +113,9 @@ class _OfficerScreenState extends State<OfficerScreen> {
       '${r.status.name.toUpperCase()}: ${r.message}';
 }
 
-/// Picks the scanner implementation for the current platform.
-Widget _scannerPageFor(String label) =>
-    defaultTargetPlatform == TargetPlatform.linux
-    ? LinuxQrScanPage(label: label)
-    : _QrScanPage(label: label);
-
+/// Enlistment gate: shown when the officer identity has not been assigned.
+/// Uses the same paged provisioning scanner as account handoff, constrained
+/// to account-type envelopes.
 class _EnlistGate extends StatelessWidget {
   const _EnlistGate({required this.app, required this.cameraUsable});
 
@@ -131,8 +125,7 @@ class _EnlistGate extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = AppPalette.of(context);
-    return ListView(
-      padding: const EdgeInsets.all(12),
+    return HudScroll(
       children: [
         HudPanel(
           title: 'OFFICER ENLISTMENT / AIR-GAPPED',
@@ -141,7 +134,7 @@ class _EnlistGate extends StatelessWidget {
             children: [
               const HduReadout(
                 'REQ',
-                'Scan the ENLISTMENT QR on the Command HQ tab. No internet.',
+                'Scan the HQ provisioning QR on the Register tab. No internet.',
               ),
               const SizedBox(height: 12),
               if (cameraUsable) ...[
@@ -149,13 +142,13 @@ class _EnlistGate extends StatelessWidget {
                 const SizedBox(height: 12),
                 HduReadout(
                   'NOTE',
-                  'Open HQ ▸ ENLISTMENT QR on the signing device and point '
-                      'this camera at it.',
+                  'Show the officer provisioning QR on the Register tab and '
+                      'point this camera at it.',
                   color: p.textDim,
                 ),
               ] else
                 HudAlertBar(
-                  'NO CAMERA ON THIS DEVICE — RUN OFFICER MODE ON A PHONE',
+                  'NO CAMERA ON THIS DEVICE: RUN OFFICER MODE ON A PHONE',
                 ),
             ],
           ),
@@ -175,92 +168,31 @@ class _EnlistScanButton extends StatelessWidget {
     final p = AppPalette.of(context);
     return FilledButton.icon(
       onPressed: () async {
+        // Account provisioning payloads span several QR frames: paged scan
+        // keeps every frame readable by a phone camera.
         final payload = await Navigator.of(context).push<String>(
-          MaterialPageRoute(builder: (_) => _scannerPageFor('MASTER KEY')),
+          MaterialPageRoute(
+            builder: (_) => const ProvisionScanPage(
+              label: 'OFFICER PROVISION',
+              expectedType: ProvisionType.account,
+            ),
+          ),
         );
         if (payload == null || !context.mounted) return;
-        final check = await app.enlistOfficer(payload);
+        final error = await app.provisionAccount(payload);
         if (!context.mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            backgroundColor: check.ok ? p.primary : p.error,
-            content: Text(check.ok ? 'OFFICER ENLISTED' : check.message),
+            backgroundColor: error != null ? p.error : p.primary,
+            content: Text(error ?? 'OFFICER PROVISIONED'),
           ),
         );
       },
       icon: const Icon(Icons.qr_code_scanner),
       label: const Text(
-        'SCAN MASTER KEY QR',
+        'SCAN HQ PROVISIONING QR',
         style: TextStyle(fontFamily: 'monospace'),
       ),
-    );
-  }
-}
-
-/// Camera scan page returning the first decoded QR payload. Requests the
-/// camera runtime permission up front so the popup appears before the UI.
-class _QrScanPage extends StatefulWidget {
-  const _QrScanPage({required this.label});
-
-  final String label;
-
-  @override
-  State<_QrScanPage> createState() => _QrScanPageState();
-}
-
-class _QrScanPageState extends State<_QrScanPage> {
-  bool _done = false;
-  bool _cameraGranted = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _requestCamera();
-  }
-
-  Future<void> _requestCamera() async {
-    // Linux uses the V4L2 page (no permission prompt).
-    if (defaultTargetPlatform == TargetPlatform.linux) {
-      if (mounted) setState(() => _cameraGranted = true);
-      return;
-    }
-    try {
-      final status = await Permission.camera.request();
-      if (!mounted) return;
-      setState(() => _cameraGranted = status.isGranted);
-    } catch (_) {
-      if (mounted) setState(() => _cameraGranted = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      appBar: AppBar(title: Text(widget.label)),
-      body: _cameraGranted
-          ? MobileScanner(
-              onDetect: (capture) {
-                if (_done) return;
-                final raw = capture.barcodes
-                    .map((b) => b.rawValue)
-                    .whereType<String>()
-                    .firstOrNull;
-                if (raw != null) {
-                  _done = true;
-                  Navigator.of(context).pop(raw);
-                }
-              },
-            )
-          : Center(
-              child: Text(
-                _cameraGranted ? '' : 'CAMERA PERMISSION REQUIRED',
-                style: const TextStyle(
-                  color: Colors.white54,
-                  fontFamily: 'monospace',
-                ),
-              ),
-            ),
     );
   }
 }
@@ -420,9 +352,9 @@ class _ScanTabState extends State<_ScanTab> {
         backgroundColor: reasonCode == kRevokeCleared ? p.primary : p.error,
         content: Text(
           reasonCode == kRevokeCleared
-              ? 'CLEARED $citizenId — broadcast over mesh'
+              ? 'CLEARED $citizenId: broadcast over mesh'
               : 'FLAGGED ${revocationReasonLabel(reasonCode).toUpperCase()}: '
-                    '$citizenId — broadcast over mesh',
+                    '$citizenId: broadcast over mesh',
         ),
       ),
     );
@@ -431,8 +363,7 @@ class _ScanTabState extends State<_ScanTab> {
   @override
   Widget build(BuildContext context) {
     final p = AppPalette.of(context);
-    return ListView(
-      padding: const EdgeInsets.all(12),
+    return HudScroll(
       children: [
         Row(
           children: [
@@ -458,7 +389,9 @@ class _ScanTabState extends State<_ScanTab> {
             onPressed: () async {
               final payload = await Navigator.of(context).push<String>(
                 MaterialPageRoute(
-                  builder: (_) => _scannerPageFor('CITIZEN CLAIM QR'),
+                  builder: (_) => const ProvisionScanPage(
+                    label: 'CITIZEN CLAIM QR',
+                  ),
                 ),
               );
               if (payload == null) return;
@@ -574,21 +507,28 @@ class _ScanTabState extends State<_ScanTab> {
           onPressed: () async {
             final payload = await Navigator.of(context).push<String>(
               MaterialPageRoute(
-                builder: (_) => _scannerPageFor('FAMILY CARD QR'),
+                builder: (_) => const ProvisionScanPage(
+                  label: 'FAMILY CARD QR',
+                  expectedType: ProvisionType.family,
+                ),
               ),
             );
             if (payload == null || !context.mounted) return;
-            final check = await widget.app.enlistFamily(payload);
+            final error = await widget.app.provisionFamilyCard(payload);
             if (!context.mounted) return;
+            final cards = error == null
+                ? await widget.app.ledger.familyCards()
+                : const <FamilyCard>[];
+            if (!context.mounted) return;
+            final fresh = cards.isNotEmpty ? cards.last : null;
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
-                backgroundColor: check.ok ? p.primary : p.error,
+                backgroundColor: error != null ? p.error : p.primary,
                 content: Text(
-                  check.ok
-                      ? 'FAMILY CARD ${check.card!.familyId} CACHED '
-                            '(${check.card!.dailyUnits.toStringAsFixed(0)}U/day, '
-                            '${check.card!.memberCitizenIds.length} members)'
-                      : check.message,
+                  error ??
+                      'FAMILY CARD ${fresh!.familyId} CACHED '
+                          '(${fresh.dailyUnits.toStringAsFixed(0)}U/day, '
+                          '${fresh.memberCitizenIds.length} members)',
                 ),
               ),
             );
@@ -660,7 +600,7 @@ class _LedgerTab extends StatelessWidget {
       future: app.ledger.allRecords(),
       builder: (context, snapshot) {
         final records = snapshot.data ?? const <LedgerRecord>[];
-        return ListView(
+        return HudScroll(
           padding: const EdgeInsets.fromLTRB(12, 12, 12, 88),
           children: [
             HduReadout('RECORDS', '${records.length}'),
@@ -697,5 +637,238 @@ class _MapTab extends StatelessWidget {
   final dynamic app;
 
   @override
-  Widget build(BuildContext context) => MeshMap(mesh: app.mesh);
+  Widget build(BuildContext context) => MeshMap(
+        mesh: app.mesh,
+        landmarks: app.officialLandmarks.where((l) => !l.isExpired).toList(),
+        onLongPressPoint: (point) => _composeLandmark(context, point),
+      );
+
+  /// Long-press placed a pin: collect details and broadcast + persist.
+  Future<void> _composeLandmark(BuildContext context, LatLng point) async {
+    var typeCode = 0;
+    final labelCtrl = TextEditingController();
+    var validityHours = 24;
+    final p = AppPalette.of(context);
+
+    final ok = await showModalBottomSheet<bool>(
+      context: context,
+      backgroundColor: p.bg,
+      isScrollControlled: true,
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.fromLTRB(
+          16,
+          16,
+          16,
+          16 + MediaQuery.of(ctx).viewInsets.bottom,
+        ),
+        child: StatefulBuilder(
+          builder: (ctx, setSheet) => Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                'PUBLISH LANDMARK',
+                style: TextStyle(
+                  color: p.primary,
+                  fontFamily: 'monospace',
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 2,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                '${point.latitude.toStringAsFixed(5)}, '
+                '${point.longitude.toStringAsFixed(5)}',
+                style: TextStyle(
+                  color: p.textDim,
+                  fontFamily: 'monospace',
+                  fontSize: 10,
+                ),
+              ),
+              const SizedBox(height: 12),
+              DropdownButton<int>(
+                value: typeCode,
+                isExpanded: true,
+                dropdownColor: p.bg,
+                items: [
+                  for (var i = 0; i < kLandmarkTypes.length; i++)
+                    DropdownMenuItem(value: i, child: Text(kLandmarkTypes[i])),
+                ],
+                onChanged: (v) => setSheet(() => typeCode = v ?? 0),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: labelCtrl,
+                maxLength: 60,
+                style: TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: 12,
+                  color: p.text,
+                ),
+                decoration: InputDecoration(
+                  labelText: 'LABEL (e.g. NORTH CAMP GATE)',
+                  labelStyle: TextStyle(
+                    color: p.textDim,
+                    fontFamily: 'monospace',
+                    fontSize: 10,
+                  ),
+                  border: const UnderlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 6,
+                children: [
+                  for (final h in const [6, 24, 48, 168])
+                    ChoiceChip(
+                      label: Text('${h}H'),
+                      selected: validityHours == h,
+                      onSelected: (_) => setSheet(() => validityHours = h),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              FilledButton.icon(
+                onPressed: () => Navigator.of(ctx).pop(true),
+                icon: const Icon(Icons.publish, size: 18),
+                label: const Text(
+                  'SIGN & BROADCAST',
+                  style: TextStyle(fontFamily: 'monospace'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (ok != true || !context.mounted) return;
+    final error = await app.postOfficialLandmark(
+      label: labelCtrl.text,
+      typeCode: typeCode,
+      latitude: point.latitude,
+      longitude: point.longitude,
+      validFor: Duration(hours: validityHours),
+    );
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        backgroundColor:
+            error != null ? AppPalette.of(context).error : p.primary,
+        content: Text(
+          error ?? 'LANDMARK SIGNED AND BROADCAST',
+          style: const TextStyle(fontFamily: 'monospace'),
+        ),
+      ),
+    );
+  }
+}
+
+/// HQ data sync tab: HQ hosts the `GZ-<USER>` link and shows a WIFI QR;
+/// this phone joins it (system camera) and the two-way exchange runs
+/// automatically against HQ's server.
+class _SyncTab extends StatelessWidget {
+  const _SyncTab({required this.app});
+
+  final dynamic app;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = AppPalette.of(context);
+    return AnimatedBuilder(
+      animation: app,
+      builder: (context, _) {
+        return HudScroll(
+          children: [
+            HudPanel(
+              title: 'HQ DATA SYNC',
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const HduReadout(
+                    'HOW',
+                    'HQ shows a QR. Tap SYNC, scan it: the phone joins the '
+                    "link and both sides exchange data automatically. "
+                    'Credentials are wiped when done.',
+                  ),
+                  const SizedBox(height: 12),
+                  if (!app.hotspotActive) ...[
+                    FilledButton.icon(
+                      onPressed: () async {
+                        // In-app scanner: reads HQ's WIFI join QR.
+                        final wifiQr = await Navigator.of(context)
+                            .push<String>(
+                          MaterialPageRoute(
+                            builder: (_) =>
+                                const ProvisionScanPage(label: 'SCAN HQ LINK QR'),
+                          ),
+                        );
+                        if (!context.mounted || wifiQr == null) return;
+                        final error = await app.startOfficerHotspot(
+                          wifiQr: wifiQr,
+                        );
+                        if (!context.mounted) return;
+                        if (error != null) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              backgroundColor: p.error,
+                              content: Text(
+                                error,
+                                style: const TextStyle(
+                                  fontFamily: 'monospace',
+                                ),
+                              ),
+                            ),
+                          );
+                        }
+                      },
+                    icon: const Icon(Icons.qr_code_scanner),
+                    label: const Text(
+                      'SYNC: SCAN HQ QR',
+                      style: TextStyle(fontFamily: 'monospace'),
+                    ),
+                    ),
+                  ] else ...[
+                    HduReadout(
+                      'STATUS',
+                      app.lastSyncStep ??
+                          'WAITING FOR LINK: open your camera app and scan '
+                              'the QR on the HQ screen (joins wifi '
+                              'automatically)',
+                      color: p.primary,
+                    ),
+                    if (app.lastSyncImported > 0)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 6),
+                        child: HduReadout(
+                          'RECEIVED',
+                          '${app.lastSyncImported} records from HQ',
+                          color: p.primary,
+                        ),
+                      ),
+                    if (app.faceSyncedToHq)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 6),
+                        child: HduReadout('FACE DATA', 'COLLECTED BY HQ',
+                            color: p.primary),
+                      ),
+                    const SizedBox(height: 12),
+                    OutlinedButton.icon(
+                      onPressed: () async {
+                        await app.stopOfficerHotspot();
+                      },
+                      icon: const Icon(Icons.stop_circle_outlined),
+                      label: const Text(
+                        'CANCEL',
+                        style: TextStyle(fontFamily: 'monospace'),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
 }

@@ -2,7 +2,6 @@ import 'package:gridzero/core/app_state.dart';
 import 'package:gridzero/core/ledger/ledger_store.dart';
 import 'package:gridzero/core/ledger/memory_ledger.dart';
 import 'package:gridzero/core/ledger/officer_sign.dart';
-import 'package:gridzero/core/master_key.dart';
 import 'package:gridzero/core/mesh_packet.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -13,6 +12,10 @@ AppState makeState() {
   AppState.nativeAdapterFactory = (nodeId) => FakeMeshAdapter();
   return AppState();
 }
+
+/// Citizen ids are Aadhaar numbers now; revocations key by the same canonical
+/// 4-byte tag the mesh frame carries, not the raw formatted string.
+String canonId(String id) => bitsToId('CIT-', idToBits(id));
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -40,63 +43,12 @@ void main() {
     expect(decoded.revocation!.issuedAt, 1700000000);
   });
 
-  test('0x07 account record chunk set roundtrips and reassembles', () {
-    // 12-char name -> 1+12+1+32 = 46 bytes -> ceil(46/11) = 5 chunks.
-    const username = 'OFFICER9001!';
-    const role = kRoleOfficer;
-    final hash = List<int>.generate(32, (i) => i * 7);
-    final chunks = buildAccountChunks(username, role, hash);
-    expect(chunks.length, 5);
-    expect(chunks.first.index, 0);
-    expect(chunks.last.total, 5);
-
-    final decodedChunks = chunks
-        .map(
-          (c) => MeshPacket.decode(
-            MeshPacket(
-              type: MeshPacketType.accountRecord,
-              senderId: 0x1234,
-              latitude: 0,
-              longitude: 0,
-              triage: TriageFlags(),
-              seq: 1,
-              accountChunk: c,
-            ).encode(),
-          ).accountChunk!,
-        )
-        .toList();
-    for (var i = 0; i < decodedChunks.length; i++) {
-      expect(decodedChunks[i].index, i);
-      expect(decodedChunks[i].total, 5);
-    }
-    final account = assembleAccount(decodedChunks);
-    expect(account, isNotNull);
-    expect(account!.username, username);
-    expect(account.roleCode, role);
-    expect(account.hashBytes, hash);
-  });
-
-  test('0x08 account request is a coords-group frame', () {
-    final p = MeshPacket(
-      type: MeshPacketType.accountRequest,
-      senderId: 0xABCD,
-      latitude: 0,
-      longitude: 0,
-      triage: TriageFlags(),
-      seq: 2,
-    );
-    final decoded = MeshPacket.decode(p.encode());
-    expect(decoded.type, MeshPacketType.accountRequest);
-    expect(decoded.senderId, 0xABCD);
-  });
-
   test(
     'officer revocation flags citizen; citizen claims are refused',
     () async {
       final officer = makeState();
       await officer.init();
       await officer.register('OFFR1', 'pass', Role.officer);
-      await officer.enlistOfficer(kSampleMasterKeyPayload);
 
       final citizen = makeState();
       await citizen.init();
@@ -108,13 +60,13 @@ void main() {
       expect(before.status, ClaimStatus.granted);
 
       await officer.revokeCitizen(cid, reasonCode: kRevokeStolen);
-      expect(officer.revokedCitizens[cid], kRevokeStolen);
+      expect(officer.revokedCitizens[canonId(cid)], kRevokeStolen);
 
       final after = await officer.claimFromPayload(payload, 'Rice');
       expect(after.status, ClaimStatus.revoked);
 
       await officer.revokeCitizen(cid, reasonCode: kRevokeCleared);
-      expect(officer.revokedCitizens.containsKey(cid), isFalse);
+      expect(officer.revokedCitizens.containsKey(canonId(cid)), isFalse);
 
       // The same TOTP window can't be claimed twice in a day, so the cleared
       // card returns a daily-duplicate, never a revoked refusal.
@@ -134,7 +86,6 @@ void main() {
     final officer = makeState();
     await officer.init(store: shared);
     await officer.register('OFFR2', 'pass', Role.officer);
-    await officer.enlistOfficer(kSampleMasterKeyPayload);
 
     final citizen = makeState();
     await citizen.init(store: shared);
@@ -149,7 +100,6 @@ void main() {
     final officer2 = makeState();
     await officer2.init(store: shared);
     await officer2.register('OFFR3', 'pass', Role.officer);
-    await officer2.enlistOfficer(kSampleMasterKeyPayload);
 
     final result = await officer2.claimFromPayload(payload, 'Rice');
     expect(result.status, ClaimStatus.revoked);
@@ -163,7 +113,6 @@ void main() {
     final officer = makeState();
     await officer.init();
     await officer.register('OFFS1', 'pass', Role.officer);
-    await officer.enlistOfficer(kSampleMasterKeyPayload);
 
     final citizen = makeState();
     await citizen.init();
@@ -225,7 +174,6 @@ void main() {
     final officer = makeState();
     await officer.init(store: shared);
     await officer.register('OFFR4', 'pass', Role.officer);
-    await officer.enlistOfficer(kSampleMasterKeyPayload);
     final citizen = makeState();
     await citizen.init(store: shared);
     await citizen.register('CITX9', 'pass', Role.citizen);
@@ -237,7 +185,7 @@ void main() {
     // A fresh process (state) reloads the blacklist from the persisted store.
     final officer2 = makeState();
     await officer2.init(store: shared);
-    expect(officer2.revokedCitizens[cid], kRevokeSuspended);
+    expect(officer2.revokedCitizens[canonId(cid)], kRevokeSuspended);
     officer2.dispose();
   });
 }

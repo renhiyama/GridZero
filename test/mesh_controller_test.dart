@@ -16,15 +16,20 @@ MeshPacket foreignPacket({int seq = 1, int ttl = 3, int hop = 0}) => MeshPacket(
 );
 
 void main() {
-  test('own broadcast registers own node state', () async {
+  test('own broadcast never registers own node in the peer map', () async {
     final adapter = FakeMeshAdapter();
     final ctrl = MeshController(nodeId: 0x1111, adapter: adapter);
     await ctrl.start();
     await ctrl.broadcastSos(triage: TriageFlags(severity: 2));
+    ctrl.setGpsFix(latitude: 19.1, longitude: 72.9);
 
+    // The local radio hears its own advertisement back (loopback), but own
+    // frames must not pollute the peer map: this device is drawn from its own
+    // GPS/estimate state, so SELF never appears as a peer/relayer/SOS source.
+    await ctrl.announce();
     await Future<void>.delayed(const Duration(milliseconds: 20));
-    expect(ctrl.nodes.containsKey(0x1111), isTrue);
-    expect(ctrl.nodes[0x1111]!.hasSos, isTrue);
+    expect(ctrl.nodes.containsKey(0x1111), isFalse);
+    expect(ctrl.nodes.isEmpty, isTrue);
     await ctrl.stop();
   });
 
@@ -89,6 +94,63 @@ void main() {
     await ctrl.stop();
   });
 
+  test('relayed SOS takes the persistent advertisement slot', () async {
+    final adapter = FakeMeshAdapter();
+    final ctrl = MeshController(nodeId: 0x1111, adapter: adapter);
+    await ctrl.start();
+
+    await adapter.injectRemote(foreignPacket(seq: 21, ttl: 3));
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+
+    final relayed = adapter.broadcasted.last;
+    expect(relayed.type, MeshPacketType.sosBeacon);
+    expect(relayed.senderId, 0x5555);
+    expect(relayed.latitude, 19.0);
+    expect(relayed.longitude, 72.8);
+    expect(relayed.hopCount, 1);
+    expect(adapter.broadcastPersistent.last, isTrue);
+    await ctrl.stop();
+  });
+
+  test('ordinary relays do not dwell in the advertisement slot', () async {
+    final adapter = FakeMeshAdapter();
+    final ctrl = MeshController(nodeId: 0x1111, adapter: adapter);
+    await ctrl.start();
+
+    final relaysBefore = ctrl.framesRelayed;
+    await adapter.injectRemote(
+      MeshPacket(
+        type: MeshPacketType.relayStatus,
+        senderId: 0x6666,
+        latitude: 19.0,
+        longitude: 72.8,
+        triage: TriageFlags(severity: 3),
+        seq: 22,
+        initialTtl: 3,
+        hopCount: 0,
+      ),
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+
+    expect(ctrl.framesRelayed - relaysBefore, 1);
+    expect(adapter.broadcastPersistent.last, isFalse);
+    await ctrl.stop();
+  });
+
+  test('radio governor hints forward to the transport', () async {
+    final adapter = FakeMeshAdapter();
+    final ctrl = MeshController(nodeId: 0x1111, adapter: adapter);
+    await ctrl.start();
+
+    await ctrl.setRadioActive(false);
+    expect(adapter.radioActive, isFalse);
+    await ctrl.setRadioActive(true);
+    expect(adapter.radioActive, isTrue);
+    await ctrl.setRadioAlert(true);
+    expect(adapter.radioAlert, isTrue);
+    await ctrl.stop();
+  });
+
   test('no GPS hardware -> announce broadcasts 0,0 no-fix sentinel', () async {
     final adapter = FakeMeshAdapter();
     final ctrl = MeshController(nodeId: 0x1111, adapter: adapter);
@@ -96,11 +158,14 @@ void main() {
     await ctrl.announce();
     await Future<void>.delayed(const Duration(milliseconds: 20));
 
-    final own = ctrl.nodes[0x1111]!;
-    expect(own.latitude, 0);
-    expect(own.longitude, 0);
+    // No own node in the peer map; the 0,0 sentinel goes out on the wire so
+    // peers never mistake this device for a located peer.
+    expect(ctrl.nodes.isEmpty, isTrue);
     expect(ctrl.gpsFix, isFalse);
     expect(ctrl.approxLatitude, isNull);
+    final sent = adapter.broadcasted.last;
+    expect(sent.latitude, 0);
+    expect(sent.longitude, 0);
     await ctrl.stop();
   });
 
@@ -158,11 +223,55 @@ void main() {
     await ctrl.announce();
     await Future<void>.delayed(const Duration(milliseconds: 20));
 
-    expect(ctrl.nodes[0x1111]!.latitude, closeTo(19.1, 1e-6));
-    expect(ctrl.nodes[0x1111]!.longitude, closeTo(72.9, 1e-6));
-    expect(ctrl.nodes[0x1111]!.altitudeM, closeTo(50, 1e-6));
+    expect(ctrl.gpsFix, isTrue);
+    expect(ctrl.effectiveLatitude, closeTo(19.1, 1e-6));
+    expect(ctrl.effectiveLongitude, closeTo(72.9, 1e-6));
+    final sent = adapter.broadcasted.last;
+    expect(sent.latitude, closeTo(19.1, 1e-6));
+    expect(sent.longitude, closeTo(72.9, 1e-6));
+    expect(ctrl.nodes.containsKey(0x1111), isFalse);
     await ctrl.stop();
   });
+
+  test(
+    'effective coordinates fall back to peer consensus without a GPS fix',
+    () async {
+      final adapter = FakeMeshAdapter();
+      final ctrl = MeshController(nodeId: 0x1111, adapter: adapter);
+      await ctrl.start();
+      expect(ctrl.gpsFix, isFalse);
+
+      // Two nearby peers around (20.3, 85.8).
+      for (final (id, lat, lon, seq) in [
+        (0xAA, 20.30, 85.80, 1),
+        (0xBB, 20.34, 85.84, 2),
+        (0xCC, 20.32, 85.82, 3),
+      ]) {
+        await adapter.injectRemote(
+          MeshPacket(
+            type: MeshPacketType.relayStatus,
+            senderId: id,
+            latitude: lat,
+            longitude: lon,
+            triage: TriageFlags(),
+            seq: seq,
+          ),
+        );
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+
+      expect(ctrl.approxLatitude, isNotNull);
+      expect(ctrl.effectiveLatitude, ctrl.approxLatitude);
+      expect(ctrl.effectiveLongitude, ctrl.approxLongitude);
+      expect(ctrl.approxLatitude!, closeTo(20.32, 1e-3));
+
+      // With a real fix, the GPS position wins the wire coordinates.
+      ctrl.setGpsFix(latitude: 9.9, longitude: 76.2);
+      expect(ctrl.effectiveLatitude, 9.9);
+      expect(ctrl.effectiveLongitude, 76.2);
+      await ctrl.stop();
+    },
+  );
 
   test('sosBeacon floods through relays with TTL (FEAT-MESH-02)', () async {
     final adapter = FakeMeshAdapter();

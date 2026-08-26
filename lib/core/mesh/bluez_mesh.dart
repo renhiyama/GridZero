@@ -52,7 +52,14 @@ class BluezMeshAdapter implements MeshAdapter {
       base + Duration(milliseconds: _rand.nextInt(900));
 
   @override
-  String get name => 'BLUEZ';
+  @override
+  void boostScan() {
+    // Linux scans continuously (tier CONTINUOUS, 0ms sleep) so a boost is
+    // unnecessary; restart the window to force a propertyChanged refresh.
+    _scanWindow();
+  }
+
+    String get name => 'BLUEZ';
 
   @override
   Stream<MeshRxPacket> get onPacket => _rx.stream;
@@ -161,8 +168,24 @@ class BluezMeshAdapter implements MeshAdapter {
     }
   }
 
+  /// Every registration BlueZ still holds for us. The LE advertising
+  /// manager allows only a handful per app: leaking handles (e.g. when a
+  /// swap fails between unregister and re-register) eventually triggers
+  /// org.bluez.Error.NotPermitted: Maximum advertisements reached.
+  final List<BlueZAdvertisement> _liveRegistrations = [];
+
   Future<void> _startAdvertising() async {
     if (_advertising) return;
+    // Recovery: a previous failure may have leaked registrations. Drop them
+    // before asking for another slot.
+    for (final stale in List.of(_liveRegistrations)) {
+      try {
+        await _adapter!.advertisingManager.unregisterAdvertisement(stale);
+      } catch (_) {
+        // BlueZ already dropped it: that is exactly what we wanted.
+      }
+      _liveRegistrations.remove(stale);
+    }
     try {
       _advert = await _adapter!.advertisingManager.registerAdvertisement(
         type: BlueZAdvertisementType.broadcast,
@@ -172,6 +195,7 @@ class BluezMeshAdapter implements MeshAdapter {
           ),
         },
       );
+      _liveRegistrations.add(_advert!);
       _advertising = true;
       _advDirty = false;
     } catch (e) {
@@ -180,38 +204,75 @@ class BluezMeshAdapter implements MeshAdapter {
     }
   }
 
-  @override
-  Future<void> broadcast(MeshPacket packet) async {
-    final payload = packet.encode();
-    final changed = !listEquals(advertisingPayload, payload);
+  /// Latest persistent frame (announce with coords, or SOS). After the
+  /// rotation drains a heartbeat burst, the slot returns here so peers catch
+  /// our live position instead of a one-shot identity/ledger frame.
+  Uint8List? _persistentPayload;
+
+  /// Frames waiting to take the advertisement slot. broadcast() only enqueues;
+  /// a 2s rotation timer swaps the radio onto each frame in turn, so a burst
+  /// (announce + identity + ledger on one heartbeat) doesn't leave only the
+  /// last frame on the air: otherwise a scanning peer would catch the identity
+  /// frame while the coords-carrying announce is overwritten within
+  /// milliseconds.
+  final List<Uint8List> _rotateQueue = [];
+  Timer? _rotateTimer;
+
+  void _scheduleRotation() {
+    if (_rotateTimer != null) return;
+    _rotateTimer = Timer.periodic(const Duration(seconds: 2), (_) async {
+      if (_rotateQueue.isEmpty) {
+        _rotateTimer?.cancel();
+        _rotateTimer = null;
+        final sticky = _persistentPayload;
+        if (sticky != null && !listEquals(advertisingPayload, sticky)) {
+          await _swapPayload(sticky);
+        }
+        return;
+      }
+      final next = _rotateQueue.removeAt(0);
+      await _swapPayload(next);
+    });
+  }
+
+  Future<void> _swapPayload(Uint8List payload) async {
     advertisingPayload = payload;
-    if (!_advertising || !changed) return;
-    try {
-      final advert = _advert;
-      // Clear the guard BEFORE unregistering, or the re-register below would
-      // no-op and the radio would silently go dark after the first payload
-      // change (the one-way mesh bug).
-      _advertising = false;
-      _advert = null;
-      if (advert != null) {
+    // Unregister BEFORE clearing state: if this throws we still track the
+    // handle in _liveRegistrations and clean it up on the next attempt: // clearing first is what leaked BlueZ advertisement slots.
+    final advert = _advert;
+    if (advert != null) {
+      try {
         await _adapter!.advertisingManager.unregisterAdvertisement(advert);
+      } catch (e) {
+        // DoesNotExist = BlueZ already dropped it: the goal is achieved.
+        final message = e.toString();
+        if (!message.contains('Does Not Exist') &&
+            !message.contains('DoesNotExist')) {
+          debugPrint('GridZero: bluez unregister failed: $e');
+        }
       }
-      _advDirty = true;
-      await _startAdvertising();
-      if (_advertising) {
-        debugPrint(
-          'GridZero: adv rotated to ${payload.length}B frame '
-          '(sender ${packet.senderId.toRadixString(16).toUpperCase()})',
-        );
-      } else {
-        // Registration rejected (e.g. radio busy mid-scan window); the idle
-        // window retries it when the radio is quiet.
-        debugPrint('GridZero: adv registration deferred to idle window');
-      }
-    } catch (e) {
-      _advDirty = true;
-      debugPrint('GridZero: bluez advertise rotation failed: $e');
+      _liveRegistrations.remove(advert);
+      _advert = null;
+      _advertising = false;
     }
+    await _startAdvertising();
+  }
+
+  @override
+  Future<void> broadcast(MeshPacket packet, {bool persistent = false}) async {
+    final payload = packet.encode();
+    if (persistent) {
+      _persistentPayload = payload;
+      if (listEquals(advertisingPayload, payload)) return;
+      return _swapPayload(payload);
+    }
+    if (listEquals(advertisingPayload, payload)) return;
+    if (_rotateQueue.isNotEmpty && listEquals(_rotateQueue.last, payload)) {
+      return;
+    }
+    _rotateQueue.add(payload);
+    if (_rotateQueue.length > 8) _rotateQueue.removeAt(0);
+    _scheduleRotation();
   }
 
   Future<void> _retryAdvertising() async {
@@ -224,6 +285,21 @@ class BluezMeshAdapter implements MeshAdapter {
   Future<void> injectRemote(MeshPacket packet) async {
     throw UnsupportedError('injectRemote is for test harnesses only');
   }
+
+  // BlueZ keeps scanning continuously, so the governor has no duty-cycle knob
+  // to turn; accepting the hints keeps the transport contract uniform.
+  @override
+  Future<void> setRadioAlert(bool active) async {}
+
+  @override
+  Future<void> setRadioActive(bool active) async {}
+
+  @override
+  Map<String, String> get diagnostics => {
+    'tier': 'CONTINUOUS',
+    'scanSleep': '0ms (BlueZ)',
+    'peers': '${_peers.length}',
+  };
 
   @override
   Future<void> stop() async {
@@ -245,6 +321,12 @@ class BluezMeshAdapter implements MeshAdapter {
       // Adapter may already be gone.
     }
     try {
+      if (_adapter != null) {
+        for (final reg in List.of(_liveRegistrations)) {
+          await _adapter!.advertisingManager.unregisterAdvertisement(reg);
+        }
+        _liveRegistrations.clear();
+      }
       if (_advert != null && _adapter != null) {
         await _adapter!.advertisingManager.unregisterAdvertisement(_advert!);
       }
@@ -254,6 +336,8 @@ class BluezMeshAdapter implements MeshAdapter {
     _advert = null;
     _advertising = false;
     _scanOn = false;
+    _rotateTimer?.cancel();
+    _rotateTimer = null;
     await _client?.close();
     _client = null;
     await _rx.close();

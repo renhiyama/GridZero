@@ -8,6 +8,7 @@ library;
 
 import 'dart:async';
 import 'dart:math';
+import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 
@@ -17,6 +18,21 @@ import 'bluez_mesh.dart';
 import 'mesh_adapter.dart';
 import 'mesh_node.dart';
 import 'native_mesh.dart';
+
+/// A fully reassembled multi-frame payload from a peer.
+class DataMessageRx {
+  const DataMessageRx({required this.senderId, required this.type, required this.bytes});
+
+  final int senderId;
+  final MeshPacketType type;
+  final Uint8List bytes;
+}
+
+/// Reassembly slots for one sender's in-flight payload.
+class _ChunkReasm {
+  int total = -1;
+  final Map<int, Uint8List> slots = {};
+}
 
 class MeshController {
   MeshController({required this.nodeId, MeshAdapter? adapter})
@@ -59,6 +75,13 @@ class MeshController {
       lat <= 90 &&
       lon >= -180 &&
       lon <= 180;
+
+  /// Coordinates to put on the wire: a real GPS fix wins; laptops without one
+  /// fall back to the peer-consensus estimate so HQ's position is visible to
+  /// the rest of the mesh instead of announcing (0,0).
+  double get effectiveLatitude => gpsFix ? gpsLatitude! : (approxLatitude ?? 0);
+  double get effectiveLongitude =>
+      gpsFix ? gpsLongitude! : (approxLongitude ?? 0);
 
   bool _validNode(MeshNodeState n) => validCoord(n.latitude, n.longitude);
 
@@ -135,7 +158,15 @@ class MeshController {
   final _sos = StreamController<MeshPacket>.broadcast();
   final _sosStarted = StreamController<MeshNodeState>.broadcast();
   final _sosEnded = StreamController<MeshNodeState>.broadcast();
+  final _responderArrived = StreamController<int>.broadcast();
+  final _dataMessages = StreamController<DataMessageRx>.broadcast();
   Timer? _sweepTimer;
+
+  /// Partial multi-frame payloads keyed by (senderId, type).
+  final Map<String, _ChunkReasm> _chunkReasm = {};
+
+  /// Node ids of peers who answered THIS device's SOS (we are the target).
+  final Set<int> _responders = {};
 
   /// Latest map of known nodes keyed by node id.
   Stream<Map<int, MeshNodeState>> get nodeUpdates => _nodeUpdates.stream;
@@ -149,6 +180,49 @@ class MeshController {
   /// Fired when a peer's SOS clears (explicit clear frame or 90s timeout).
   Stream<MeshNodeState> get sosEnded => _sosEnded.stream;
 
+  /// Fired with the responder's node id the first time it acknowledges this
+  /// device's SOS. The ringing alert and the "help on the way" banner hook
+  /// here.
+  Stream<int> get responderArrived => _responderArrived.stream;
+
+  /// Fully reassembled multi-frame payloads from peers.
+  Stream<DataMessageRx> get dataMessages => _dataMessages.stream;
+
+  /// Collects one chunk; emits the completed blob when all slots arrive.
+  DataMessageRx? _reassembleChunks(
+    int senderId,
+    MeshPacketType type,
+    MeshDataChunk chunk,
+  ) {
+    if (chunk.total < 1 || chunk.total > 40 || chunk.index >= chunk.total) {
+      return null;
+    }
+    final key = '$senderId/${type.value}';
+    final state = _chunkReasm.putIfAbsent(key, _ChunkReasm.new);
+    if (state.total != chunk.total) {
+      state.total = chunk.total;
+      state.slots.clear();
+    }
+    state.slots[chunk.index] = chunk.data;
+    if (state.slots.length < state.total) return null;
+    _chunkReasm.remove(key);
+    final blob = BytesBuilder();
+    for (var i = 0; i < state.total; i++) {
+      blob.add(state.slots[i]!);
+    }
+    return DataMessageRx(
+      senderId: senderId,
+      type: type,
+      bytes: blob.toBytes(),
+    );
+  }
+
+  /// Peers who acknowledged this device's SOS.
+  Set<int> get responders => Set.unmodifiable(_responders);
+
+  /// Forgets every responder (fresh SOS episode, logout, wipe).
+  void clearResponders() => _responders.clear();
+
   /// Called by the app layer with a received ledger record so it can merge
   /// it into the central store (FR-3.5 store-and-forward sync).
   void Function(CompactRecord record, int fromNodeId)? onLedgerRecord;
@@ -158,13 +232,6 @@ class MeshController {
 
   /// Called with a stolen/suspended card alert diffused by an officer.
   void Function(RevocationAlert alert, int fromNodeId)? onRevocation;
-
-  /// Called with one slice of a chunked account credential.
-  void Function(AccountChunk chunk, int fromNodeId)? onAccountChunk;
-
-  /// Called when a peer asks the mesh to announce its local accounts
-  /// (fresh-device login probe).
-  void Function(int fromNodeId)? onAccountRequest;
 
   Map<int, MeshNodeState> get nodes => Map.unmodifiable(_nodes);
 
@@ -195,6 +262,7 @@ class MeshController {
     await _sos.close();
     await _sosStarted.close();
     await _sosEnded.close();
+    await _responderArrived.close();
   }
 
   /// Builds, sequence-stamps and floods a new local packet. With
@@ -209,31 +277,44 @@ class MeshController {
     final packet = _newPacket(
       MeshPacketType.sosBeacon,
       triage: triage,
-      latitude: latitude ?? (gpsFix ? gpsLatitude! : 0),
-      longitude: longitude ?? (gpsFix ? gpsLongitude! : 0),
+      latitude: latitude ?? effectiveLatitude,
+      longitude: longitude ?? effectiveLongitude,
       altitude: altitude ?? gpsAltitude,
       flags: cleared ? 1 : 0,
     );
-    return broadcast(packet);
+    // SOS beacons are the mesh's most urgent frames: persistent so the slot
+    // returns to them (not a transient identity/ledger frame).
+    return broadcast(packet, persistent: true);
   }
 
   /// Floods an arbitrary locally-built packet with a fresh sequence stamp.
-  Future<void> broadcast(MeshPacket packet) {
+  Future<void> broadcast(MeshPacket packet, {bool persistent = false}) {
     _dedup.insert(packet.dedupKey);
-    return adapter.broadcast(packet);
+    return adapter.broadcast(packet, persistent: persistent);
   }
 
-  /// Announces relay status (heartbeat) so peers map this node.
+  /// Radio-governor hints: forward to the transport so it can trade scan duty
+  /// for latency when SOS is live and bank battery when it is not.
+  Future<void> setRadioAlert(bool active) => adapter.setRadioAlert(active);
+
+  Future<void> setRadioActive(bool active) => adapter.setRadioActive(active);
+
+  /// Live radio-governor state for the HUD diagnostics readout.
+  Map<String, String> get radioDiagnostics => adapter.diagnostics;
+
+  /// Announces relay status (heartbeat) so peers map this node. Persistent:
+  /// the coordinate-carrying announce is the frame peers must catch, so it
+  /// gets the long-dwell slot between heartbeat bursts.
   Future<void> announce() {
     final packet = _newPacket(
       MeshPacketType.relayStatus,
       triage: TriageFlags(),
-      latitude: gpsFix ? gpsLatitude! : 0,
-      longitude: gpsFix ? gpsLongitude! : 0,
+      latitude: effectiveLatitude,
+      longitude: effectiveLongitude,
       altitude: gpsAltitude,
     );
     _dedup.insert(packet.dedupKey);
-    return adapter.broadcast(packet);
+    return adapter.broadcast(packet, persistent: true);
   }
 
   /// Broadcasts this node's account identity so peers can name us instead of
@@ -259,8 +340,8 @@ class MeshController {
     final packet = _newPacket(
       MeshPacketType.ledgerSyncRequest,
       triage: TriageFlags(),
-      latitude: gpsFix ? gpsLatitude! : 0,
-      longitude: gpsFix ? gpsLongitude! : 0,
+      latitude: effectiveLatitude,
+      longitude: effectiveLongitude,
     );
     _dedup.insert(packet.dedupKey);
     return adapter.broadcast(packet);
@@ -305,31 +386,64 @@ class MeshController {
     return adapter.broadcast(packet);
   }
 
-  /// Floods one account credential chunk set so a fresh device listening at
-  /// the login screen can reassemble and adopt the account.
-  Future<void> broadcastAccount(List<AccountChunk> chunks) async {
-    for (final c in chunks) {
+  /// Floods a multi-frame payload (chat text or signed announcement blob),
+  /// split into 11-byte chunks. Enqueueing is PACED slower than the adapter
+  /// rotation drain: dumping all chunks at once overflows the queue, whose
+  /// head-drop then starves indices and the far end never reassembles.
+  Future<void> broadcastDataPayload(
+    MeshPacketType type,
+    Uint8List blob,
+  ) async {
+    final total = (blob.length / MeshDataChunk.chunkBytes).ceil();
+    if (total < 1 || total > 40) {
+      throw ArgumentError('payload size out of range for chunked frames');
+    }
+    for (var i = 0; i < total; i++) {
+      var waited = 0;
+      while (true) {
+        final depth =
+            int.tryParse(adapter.diagnostics['advQueue'] ?? '0') ?? 0;
+        if (depth <= 4 || waited > 8000) break;
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+        waited += 100;
+      }
+      final slice = Uint8List.sublistView(
+        blob,
+        i * MeshDataChunk.chunkBytes,
+        ((i + 1) * MeshDataChunk.chunkBytes).clamp(0, blob.length),
+      );
       final packet = MeshPacket(
-        type: MeshPacketType.accountRecord,
+        type: type,
         senderId: nodeId,
         latitude: 0,
         longitude: 0,
         triage: TriageFlags(),
         seq: (_seq = (_seq + 1) & 0xffff),
-        accountChunk: c,
+        chunk: MeshDataChunk(
+          index: i,
+          total: total,
+          data: Uint8List.fromList(slice),
+        ),
       );
       _dedup.insert(packet.dedupKey);
       await adapter.broadcast(packet);
+      if (i < total - 1) {
+        await Future<void>.delayed(const Duration(milliseconds: 500));
+      }
     }
   }
 
-  /// Asks adjacent terminals to announce their local accounts (login probe).
-  Future<void> broadcastAccountRequest() {
-    final packet = _newPacket(
-      MeshPacketType.accountRequest,
-      triage: TriageFlags(),
+  /// Broadcasts that this device is heading to the given SOS node, so the
+  /// target hears "help is on the way" (and relays carry it a hop beyond).
+  Future<void> broadcastRespond(int targetNodeId) {
+    final packet = MeshPacket(
+      type: MeshPacketType.respond,
+      senderId: nodeId,
       latitude: 0,
       longitude: 0,
+      triage: TriageFlags(),
+      seq: (_seq = (_seq + 1) & 0xffff),
+      targetNodeId: targetNodeId,
     );
     _dedup.insert(packet.dedupKey);
     return adapter.broadcast(packet);
@@ -359,8 +473,10 @@ class MeshController {
   void _onRx(MeshRxPacket rx) {
     final p = rx.packet;
     framesSeen++;
-    final isOwn = p.senderId == nodeId;
-    if (!isOwn && !_dedup.insert(p.dedupKey)) {
+    // Loopback: the local adapter hears its own advertisement on radios that
+    // scan and advertise concurrently. Own frames must never become a peer: // this device is drawn from its own GPS/estimate state, not the mesh map.
+    if (p.senderId == nodeId) return;
+    if (!_dedup.insert(p.dedupKey)) {
       return; // FR-1.4: sliding-window replay rejection
     }
 
@@ -375,26 +491,33 @@ class MeshController {
 
     if (p.type == MeshPacketType.sosBeacon) {
       _sos.add(p);
-      if (p.sosCleared) {
-        if (wasSos) _sosEnded.add(node);
-      } else if (!wasSos && !isOwn) {
-        _sosStarted.add(node);
-      }
+    }
+    // Fire the alarm streams on any active<->off transition: explicit SOS
+    // cleared frame, a relayStatus announce proving deactivation, or the
+    // sweep expiry (all end up here via node.hasSos changing).
+    if (wasSos && !node.hasSos) {
+      _sosEnded.add(node);
+    } else if (!wasSos && node.hasSos) {
+      _sosStarted.add(node);
     }
 
-    if (p.type == MeshPacketType.ledgerRecord && p.syncRecord != null) {
+    if (p.type == MeshPacketType.respond && p.targetNodeId == nodeId) {
+      // Help is on the way: the first time a responder acks, alert the user.
+      if (_responders.add(p.senderId)) _responderArrived.add(p.senderId);
+    } else if (p.type == MeshPacketType.ledgerRecord && p.syncRecord != null) {
       onLedgerRecord?.call(p.syncRecord!, p.senderId);
-    } else if (p.type == MeshPacketType.ledgerSyncRequest && !isOwn) {
+    } else if (p.type == MeshPacketType.ledgerSyncRequest) {
       onLedgerSyncRequest?.call(p.senderId);
     }
 
     if (p.type == MeshPacketType.revocationAlert && p.revocation != null) {
       onRevocation?.call(p.revocation!, p.senderId);
-    } else if (p.type == MeshPacketType.accountRecord &&
-        p.accountChunk != null) {
-      onAccountChunk?.call(p.accountChunk!, p.senderId);
-    } else if (p.type == MeshPacketType.accountRequest && !isOwn) {
-      onAccountRequest?.call(p.senderId);
+    }
+
+    if (p.chunk != null &&
+        (p.type == MeshPacketType.chat || p.type == MeshPacketType.announce)) {
+      final msg = _reassembleChunks(p.senderId, p.type, p.chunk!);
+      if (msg != null) _dataMessages.add(msg);
     }
 
     // FR-1.3: relay while TTL remains and the frame is not ours. Payload
@@ -413,14 +536,18 @@ class MeshController {
         hopCount: p.hopCount + 1,
         flags: p.flags,
         altitudeCm: p.altitudeCm,
-        identityUsername: p.identityUsername,
-        identityRole: p.identityRole,
-        syncRecord: p.syncRecord,
-        revocation: p.revocation,
-        accountChunk: p.accountChunk,
-      );
+      identityUsername: p.identityUsername,
+      identityRole: p.identityRole,
+      syncRecord: p.syncRecord,
+      revocation: p.revocation,
+      chunk: p.chunk,
+      targetNodeId: p.targetNodeId,
+    );
       framesRelayed++;
-      adapter.broadcast(relay);
+      // SOS is life-critical: the relayed alarm dwells in the long-dwell
+      // advertisement slot so the next hop catches it on its next scan
+      // window. Ordinary frames rotate through briefly instead.
+      adapter.broadcast(relay, persistent: p.type == MeshPacketType.sosBeacon);
     }
   }
 

@@ -4,8 +4,7 @@
 ///   Byte 0     MAGIC       0xA5
 ///   Byte 1     TYPE        0x01 SOS | 0x02 Relay Status | 0x03 Ledger Sync Req
 ///                          | 0x04 Identity | 0x05 Ledger Record
-///                          | 0x06 Revocation Alert | 0x07 Account Record
-///                          | 0x08 Account Request
+///                          | 0x06 Revocation Alert | 0x09 Respond Ack
 ///   Bytes 2-3  SENDER_ID   uint16 node id hash suffix
 ///   Bytes 4-7  LATITUDE    int32 fixed point lat * 1e7
 ///   Bytes 8-11 LONGITUDE   int32 fixed point lon * 1e7
@@ -79,8 +78,9 @@ enum MeshPacketType {
   identityAnnounce(0x04),
   ledgerRecord(0x05),
   revocationAlert(0x06),
-  accountRecord(0x07),
-  accountRequest(0x08);
+  chat(0x07),
+  announce(0x08),
+  respond(0x09);
 
   const MeshPacketType(this.value);
 
@@ -96,13 +96,14 @@ enum MeshPacketType {
 /// HQ logs): compact at-a-glance identification of the last frame type.
 String packetSymbol(MeshPacketType type) => switch (type) {
   MeshPacketType.sosBeacon => '[▲ SOS]',
-  MeshPacketType.relayStatus => '[▲ SOS]',
+  MeshPacketType.relayStatus => '[▸ HB]',
   MeshPacketType.ledgerRecord => '[≡ LEDGER]',
   MeshPacketType.ledgerSyncRequest => '[≡ LEDGER]',
   MeshPacketType.revocationAlert => '[✕ REVOKED]',
   MeshPacketType.identityAnnounce => '[▸ ID]',
-  MeshPacketType.accountRecord => '[▸ ACC]',
-  MeshPacketType.accountRequest => '[▸ ACC]',
+  MeshPacketType.chat => '[✉ CHAT]',
+  MeshPacketType.announce => '[⌖ LANDMARK]',
+  MeshPacketType.respond => '[✓ RESPOND]',
 };
 
 /// TRIAGE_FLAGS bitfield: [7 Medical][6 Trapped][5 Water][4 Food][3..0 Severity].
@@ -183,66 +184,6 @@ class RevocationAlert {
   final int issuedAt;
 }
 
-/// One slice of a chunked account credential (0x07). A full account is
-/// ~46 bytes (name ≤12 + role + 32-byte password hash), far beyond a single
-/// frame, so it travels as consecutive 11-byte blobs with an index and total.
-class AccountChunk {
-  AccountChunk({required this.index, required this.total, required this.data});
-
-  final int index;
-  final int total;
-  final Uint8List data;
-}
-
-/// Splits an account credential into 11-byte chunks for the mesh.
-/// Blob layout: [nameLen][name ascii][role][password-hash 32B].
-List<AccountChunk> buildAccountChunks(
-  String username,
-  int roleCode,
-  List<int> hashBytes,
-) {
-  final name = username.toUpperCase().codeUnits.take(12).toList();
-  final blob = <int>[name.length, ...name, roleCode, ...hashBytes];
-  final total = (blob.length / 11).ceil();
-  return [
-    for (var i = 0; i < total; i++)
-      AccountChunk(
-        index: i,
-        total: total,
-        data: Uint8List(11)
-          ..setRange(0, (blob.length - i * 11).clamp(0, 11), blob.skip(i * 11)),
-      ),
-  ];
-}
-
-/// Reassembles account chunks into (username, roleCode, hashBytes). Returns
-/// null until every chunk is present or the blob is malformed.
-({String username, int roleCode, List<int> hashBytes})? assembleAccount(
-  List<AccountChunk> chunks,
-) {
-  if (chunks.isEmpty) return null;
-  final expected = chunks.first.total;
-  if (chunks.length != expected) return null;
-  final byIndex = {for (final c in chunks) c.index: c};
-  if (byIndex.length != expected) return null;
-  final blob = <int>[];
-  for (var i = 0; i < expected; i++) {
-    final c = byIndex[i];
-    if (c == null) return null;
-    blob.addAll(c.data);
-  }
-  final len = blob[0];
-  if (len < 1 || len > 12) return null;
-  final role = blob[1 + len];
-  final hash = blob.sublist(1 + len + 1, 1 + len + 1 + 32);
-  if (hash.length != 32) return null;
-  return (
-    username: String.fromCharCodes(blob.sublist(1, 1 + len)),
-    roleCode: role,
-    hashBytes: hash,
-  );
-}
-
 /// Packs "CIT-XXXXXXXX" / "OFF-XXXXXXXX" into 4 bytes. Anything not in that
 /// shape hashes down to a stable 4-byte tag instead of corrupting the frame.
 int idToBits(String id) {
@@ -256,6 +197,26 @@ int idToBits(String id) {
 
 String bitsToId(String prefix, int bits) =>
     '$prefix${(bits & 0xffffffff).toRadixString(16).padLeft(8, '0').toUpperCase()}';
+
+/// One 11-byte slice of a multi-frame payload (chat text or a signed
+/// announcement blob). Shared wire layout for types 0x07/0x08:
+///   byte 4    chunk index
+///   byte 12   total chunks
+///   byte 17   real slice length (final chunk may be short)
+///   bytes 5-7, 8-11, 18-21   payload slice
+class MeshDataChunk {
+  MeshDataChunk({
+    required this.index,
+    required this.total,
+    required this.data,
+  }) : assert(data.isNotEmpty && data.length <= chunkBytes);
+
+  static const int chunkBytes = 11;
+
+  final int index;
+  final int total;
+  final Uint8List data;
+}
 
 class MeshPacket {
   MeshPacket({
@@ -273,7 +234,8 @@ class MeshPacket {
     this.identityRole,
     this.syncRecord,
     this.revocation,
-    this.accountChunk,
+    this.chunk,
+    this.targetNodeId = 0,
   });
 
   final MeshPacketType type;
@@ -304,8 +266,11 @@ class MeshPacket {
   /// Revocation payload (type == revocationAlert).
   final RevocationAlert? revocation;
 
-  /// Account credential slice (type == accountRecord).
-  final AccountChunk? accountChunk;
+  /// Multi-frame payload slice (types chat / officialAnnounce).
+  final MeshDataChunk? chunk;
+
+  /// SOS node this device is answering (type == respond). Zero otherwise.
+  final int targetNodeId;
 
   /// Altitude in cm above sea level, or null when unknown.
   final int? altitudeCm;
@@ -364,18 +329,32 @@ class MeshPacket {
         out[12] = rev.reasonCode & 0xff;
         bd.setUint32(18, rev.issuedAt, Endian.big);
         out[17] = 0;
-      case MeshPacketType.accountRecord:
-        final c = accountChunk!;
+      case MeshPacketType.chat:
+      case MeshPacketType.announce:
+        final c = chunk!;
         out[4] = c.index;
         out[12] = c.total;
-        out.setRange(5, 8, c.data.sublist(0, 3));
-        out.setRange(8, 12, c.data.sublist(3, 7));
-        out.setRange(18, 22, c.data.sublist(7, 11));
+        final buf = Uint8List(MeshDataChunk.chunkBytes)
+          ..setRange(
+            0,
+            c.data.length.clamp(0, MeshDataChunk.chunkBytes),
+            c.data,
+          );
+        final bufBd = buf.buffer.asByteData();
+        bd.setInt32(5, bufBd.getInt32(0, Endian.big), Endian.big);
+        bd.setInt32(8, bufBd.getInt32(3, Endian.big), Endian.big);
+        bd.setInt32(18, bufBd.getInt32(7, Endian.big), Endian.big);
+        // Real length: the last chunk of a payload is usually short.
+        out[17] = c.data.length;
+      case MeshPacketType.respond:
+        bd.setUint16(4, targetNodeId, Endian.big);
+        bd.setInt32(8, 0, Endian.big);
+        out[12] = 0;
         out[17] = 0;
+        bd.setInt32(18, 0, Endian.big);
       case MeshPacketType.ledgerSyncRequest:
       case MeshPacketType.sosBeacon:
       case MeshPacketType.relayStatus:
-      case MeshPacketType.accountRequest:
         bd.setInt32(4, _fixedPoint(latitude, 10000000), Endian.big);
         bd.setInt32(8, _fixedPoint(longitude, 10000000), Endian.big);
         out[12] = triage.value;
@@ -404,8 +383,7 @@ class MeshPacket {
     final carriesCoords = switch (type) {
       MeshPacketType.sosBeacon ||
       MeshPacketType.relayStatus ||
-      MeshPacketType.ledgerSyncRequest ||
-      MeshPacketType.accountRequest => true,
+      MeshPacketType.ledgerSyncRequest => true,
       _ => false,
     };
     final base = MeshPacket(
@@ -485,11 +463,13 @@ class MeshPacket {
             issuedAt: bd.getUint32(18, Endian.big),
           ),
         );
-      case MeshPacketType.accountRecord:
-        final data = Uint8List(11);
-        data.setRange(0, 3, raw.sublist(5, 8));
-        data.setRange(3, 7, raw.sublist(8, 12));
-        data.setRange(7, 11, raw.sublist(18, 22));
+      case MeshPacketType.chat:
+      case MeshPacketType.announce:
+        final buf = Uint8List(MeshDataChunk.chunkBytes);
+        final bufBd = buf.buffer.asByteData();
+        bufBd.setInt32(0, bd.getInt32(5, Endian.big), Endian.big);
+        bufBd.setInt32(3, bd.getInt32(8, Endian.big), Endian.big);
+        bufBd.setInt32(7, bd.getInt32(18, Endian.big), Endian.big);
         return MeshPacket(
           type: type,
           senderId: base.senderId,
@@ -501,12 +481,32 @@ class MeshPacket {
           hopCount: base.hopCount,
           flags: 0,
           altitudeCm: null,
-          accountChunk: AccountChunk(index: raw[4], total: raw[12], data: data),
+          chunk: MeshDataChunk(
+            index: raw[4],
+            total: raw[12],
+            data: buf.sublist(
+              0,
+              raw[17].clamp(1, MeshDataChunk.chunkBytes),
+            ),
+          ),
+        );
+      case MeshPacketType.respond:
+        return MeshPacket(
+          type: type,
+          senderId: base.senderId,
+          latitude: 0,
+          longitude: 0,
+          triage: TriageFlags(),
+          seq: base.seq,
+          initialTtl: base.initialTtl,
+          hopCount: base.hopCount,
+          flags: 0,
+          altitudeCm: null,
+          targetNodeId: bd.getUint16(4, Endian.big),
         );
       case MeshPacketType.sosBeacon:
       case MeshPacketType.relayStatus:
       case MeshPacketType.ledgerSyncRequest:
-      case MeshPacketType.accountRequest:
         return MeshPacket(
           type: type,
           senderId: base.senderId,

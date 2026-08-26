@@ -2,6 +2,9 @@
 /// daily-duplicate and hash-chain rules as the SQLite backend.
 library;
 
+import 'dart:typed_data';
+import 'dart:convert';
+
 import 'ledger_store.dart';
 
 class MemoryLedgerStore implements LedgerStore {
@@ -10,7 +13,10 @@ class MemoryLedgerStore implements LedgerStore {
   final Map<int, Map<String, Object?>> _nodes = {};
   final Map<String, RevocationEntry> _revocations = {};
   final Map<String, (List<int>, List<int>)> _officerKeys = {};
+  final Map<String, LandmarkRecord> _landmarks = {};
   final Map<String, FamilyCard> _familyCards = {};
+  final Map<String, OfficerRecord> _officers = {};
+  final Map<String, Float32List> _faceEmbeddings = {};
 
   @override
   Future<void> close() async {}
@@ -23,6 +29,8 @@ class MemoryLedgerStore implements LedgerStore {
     _revocations.clear();
     _officerKeys.clear();
     _familyCards.clear();
+    _officers.clear();
+    _faceEmbeddings.clear();
   }
 
   @override
@@ -151,6 +159,28 @@ class MemoryLedgerStore implements LedgerStore {
   }
 
   @override
+  Future<void> upsertOfficer(OfficerRecord officer) async {
+    _officers[officer.officerId] = officer;
+  }
+
+  @override
+  Future<List<OfficerRecord>> officers() async {
+    final records = _officers.values.toList()
+      ..sort((a, b) => b.enlistedAt.compareTo(a.enlistedAt));
+    return records;
+  }
+
+  @override
+  Future<void> upsertLandmark(LandmarkRecord landmark) async {
+    _landmarks['${landmark.officerId}/${landmark.label}'] = landmark;
+  }
+
+  @override
+  Future<List<LandmarkRecord>> landmarks() async =>
+      _landmarks.values.toList();
+
+
+  @override
   Future<void> upsertFamilyCard(FamilyCard card) async {
     _familyCards[card.familyId] = card;
   }
@@ -177,5 +207,93 @@ class MemoryLedgerStore implements LedgerStore {
       }
     }
     return used;
+  }
+
+  @override
+  Future<void> saveFaceEmbedding(String citizenId, Float32List embedding) async {
+    _faceEmbeddings[citizenId] = Float32List.fromList(embedding);
+  }
+
+  @override
+  Future<Float32List?> faceEmbedding(String citizenId) async =>
+      _faceEmbeddings[citizenId];
+
+  @override
+  Future<String> exportSnapshot() async {
+    final embEntries = [
+      for (final e in _faceEmbeddings.entries)
+        {
+          'citizen_id': e.key,
+          'embedding': base64Encode(
+            ByteData.sublistView(e.value).buffer.asUint8List(),
+          ),
+        },
+    ];
+    return jsonEncode({
+      'v': 1,
+      'records': [for (final r in _records) r.toMap()],
+      'revocations': [
+        for (final e in _revocations.values)
+          {
+            'citizen_id': e.citizenId,
+            'reason_code': e.reasonCode,
+            'issued_at': e.issuedAt,
+            'source_node': e.sourceNode,
+          },
+      ],
+      'officers': [for (final o in _officers.values) o.toMap()],
+      'family_cards': [for (final c in _familyCards.values) c.toMap()],
+      'face_embeddings': embEntries,
+    });
+  }
+
+  @override
+  Future<String?> importSnapshot(String json) async {
+    final Object? decoded;
+    try {
+      decoded = jsonDecode(json);
+    } catch (_) {
+      return 'malformed DB snapshot';
+    }
+    if (decoded is! Map<String, Object?>) return 'malformed DB snapshot';
+    if (decoded['v'] != 1) return 'unsupported snapshot version';
+    try {
+      for (final raw in (decoded['records'] as List?) ?? const []) {
+        if (raw is! Map) throw const FormatException('bad record');
+        final record = LedgerRecord.fromMap(raw.cast<String, Object?>());
+        if (!_syncRecords.any((r) => r.recordId == record.recordId)) {
+          _syncRecords.add(record);
+        }
+      }
+      for (final raw in (decoded['family_cards'] as List?) ?? const []) {
+        if (raw is! Map) throw const FormatException('bad family card');
+        final card = FamilyCard.fromMap(raw.cast<String, Object?>());
+        _familyCards[card.familyId] = card;
+      }
+      for (final raw in (decoded['revocations'] as List?) ?? const []) {
+        if (raw is! Map) throw const FormatException('bad revocation');
+        final e = RevocationEntry(
+          citizenId: raw['citizen_id'] as String,
+          reasonCode: raw['reason_code'] as int,
+          issuedAt: raw['issued_at'] as int,
+          sourceNode: raw['source_node'] as int,
+        );
+        _revocations[e.citizenId] = e;
+      }
+      for (final raw in (decoded['officers'] as List?) ?? const []) {
+        if (raw is! Map) throw const FormatException('bad officer');
+        final o = OfficerRecord.fromMap(raw.cast<String, Object?>());
+        _officers[o.officerId] = o;
+      }
+      for (final raw in (decoded['face_embeddings'] as List?) ?? const []) {
+        if (raw is! Map) throw const FormatException('bad embedding');
+        final bytes = base64Decode(raw['embedding'] as String);
+        _faceEmbeddings[raw['citizen_id'] as String] =
+            Float32List.sublistView(ByteData.sublistView(bytes));
+      }
+      return null;
+    } on Exception catch (e) {
+      return 'snapshot import failed: $e';
+    }
   }
 }

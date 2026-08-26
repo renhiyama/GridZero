@@ -35,27 +35,61 @@ class _RadarScreenState extends State<RadarScreen>
 
   StreamSubscription<CompassEvent>? _compassSub;
   double? _heading;
+  double? _smoothedHeading;
+
+  /// Shortest signed arc from [from] to [to] in degrees (-180..180). Naive
+  /// subtraction breaks smoothing across the 359/0 wrap.
+  static double _angleDelta(double from, double to) =>
+      (to - from + 540) % 360 - 180;
   bool _responding = false;
+  Timer? _respondTimer;
 
   @override
   void initState() {
     super.initState();
     // Compass needs a magnetometer; laptops return null and fall back to
-    // north-up mode.
+    // north-up mode. Raw magnetometer headings jitter by several degrees,
+    // so they pass through an exponential smoother before painting.
     if (defaultTargetPlatform == TargetPlatform.android ||
         defaultTargetPlatform == TargetPlatform.iOS) {
       _compassSub = FlutterCompass.events?.listen((e) {
         if (!mounted || e.heading == null) return;
-        setState(() => _heading = e.heading);
+        final raw = e.heading!;
+        setState(() {
+          _heading = _smoothedHeading == null
+              ? raw
+              : _smoothedHeading! +
+                    _angleDelta(_smoothedHeading!, raw) * 0.18;
+        });
+        _smoothedHeading = _heading;
       });
     }
   }
 
   @override
   void dispose() {
+    _respondTimer?.cancel();
     _compassSub?.cancel();
     _pulse.dispose();
     super.dispose();
+  }
+
+  /// Respond toggle: on = ack the SOS node now, then re-ack every 10s while
+  /// the radar stays open so a missed scan window self-heals. Off = stand
+  /// down (the target still has this ack until its beacon lease lapses).
+  void _toggleRespond(AppState app, int targetNodeId) {
+    if (_responding) {
+      _respondTimer?.cancel();
+      _respondTimer = null;
+      setState(() => _responding = false);
+      return;
+    }
+    unawaited(app.sendSosRespond(targetNodeId));
+    _respondTimer = Timer.periodic(const Duration(seconds: 10), (_) {
+      if (!mounted) return;
+      unawaited(app.sendSosRespond(targetNodeId));
+    });
+    setState(() => _responding = true);
   }
 
   @override
@@ -77,7 +111,7 @@ class _RadarScreenState extends State<RadarScreen>
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                _header(p, node, t),
+                _header(p, app, node, t),
                 Expanded(
                   child: _RadarDial(
                     pulse: _pulse,
@@ -103,13 +137,13 @@ class _RadarScreenState extends State<RadarScreen>
     backgroundColor: p.bg,
     body: Center(
       child: Text(
-        'TARGET LOST — NO FRESH BEACON',
+        'TARGET LOST: NO FRESH BEACON',
         style: TextStyle(color: p.error, fontFamily: 'monospace'),
       ),
     ),
   );
 
-  Widget _header(AppPalette p, MeshNodeState node, _TrackTarget t) {
+  Widget _header(AppPalette p, AppState app, MeshNodeState node, _TrackTarget t) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(8, 4, 12, 0),
       child: Row(
@@ -144,7 +178,7 @@ class _RadarScreenState extends State<RadarScreen>
           const Spacer(),
           _RespondButton(
             active: _responding,
-            onPressed: () => setState(() => _responding = !_responding),
+            onPressed: () => _toggleRespond(app, node.nodeId),
             palette: p,
           ),
         ],
@@ -152,7 +186,8 @@ class _RadarScreenState extends State<RadarScreen>
     );
   }
 
-  String _rssiLabel(_TrackTarget t) => 'RSSI ${t.node.rssi} dBm';
+  String _rssiLabel(_TrackTarget t) =>
+      'SIGNAL ${_rssiPercent(t.node.rssi)}% ${_signalWord(_rssiPercent(t.node.rssi))}';
 
   Widget _readouts(AppPalette p, _TrackTarget t) {
     return Padding(
@@ -179,24 +214,35 @@ class _RadarScreenState extends State<RadarScreen>
             ),
           ),
           const SizedBox(height: 8),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
+          Wrap(
+            alignment: WrapAlignment.center,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 6,
+            runSpacing: 6,
             children: [
-              _chip(p, 'RSSI ${t.node.rssi} dBm'),
-              _chip(p, 'HOP ${t.node.hopCount}'),
+              _SignalBars(
+                percent: _rssiPercent(t.node.rssi),
+                color: p.primary,
+              ),
+              _chip(
+                p,
+                '${_rssiPercent(t.node.rssi)}% '
+                '${_signalWord(_rssiPercent(t.node.rssi))}',
+              ),
+              _chip(
+                p,
+                t.node.hopCount == 0 ? 'DIRECT' : 'RELAY ${t.node.hopCount}',
+              ),
               if (t.altDeltaM != null)
-                _chip(
-                  p,
-                  'ALT ${t.altDeltaM!.abs().round()} m '
-                  '${t.altDeltaM! < 0 ? 'BELOW' : 'ABOVE'}',
-                ),
+                _chip(p, _altLabel(t.altDeltaM!)),
             ],
           ),
           if (_heading != null)
             Padding(
               padding: const EdgeInsets.only(top: 4),
               child: Text(
-                'HEADING ${_heading!.round().toString().padLeft(3, '0')}°',
+                'FACING ${_cardinal(_heading!)} '
+                '${_heading!.round().toString().padLeft(3, '0')}°',
                 style: TextStyle(
                   color: p.textDim,
                   fontFamily: 'monospace',
@@ -212,11 +258,17 @@ class _RadarScreenState extends State<RadarScreen>
   /// Says which side is missing a fix instead of blaming this device.
   String _directionText(_TrackTarget t) {
     if (t.hasBearing) {
-      return 'BEARING ${t.bearingDeg!.round().toString().padLeft(3, '0')}° '
-          '${_cardinal(t.bearingDeg!)}';
+      final deg = t.bearingDeg!.round();
+      return 'TARGET ${_cardinal(t.bearingDeg!)}: ${deg.toString().padLeft(3, '0')}°';
     }
     if (!t.hasOwnGps) return 'YOUR DEVICE HAS NO GPS FIX';
-    return 'TARGET HAS NO GPS FIX — RANGE ESTIMATE ONLY';
+    return 'TARGET HAS NO GPS FIX: RANGE ESTIMATE ONLY';
+  }
+
+  String _altLabel(double altDeltaM) {
+    if (altDeltaM.abs() < 1.5) return 'ALT SAME LEVEL';
+    return 'ALT ${altDeltaM.abs().round()} m '
+        '${altDeltaM < 0 ? 'BELOW' : 'ABOVE'}';
   }
 
   Widget _chip(AppPalette p, String label) => Container(
@@ -267,7 +319,7 @@ class _RadarScreenState extends State<RadarScreen>
             Padding(
               padding: const EdgeInsets.only(bottom: 10),
               child: Text(
-                'RESPONDING — SOS KEEPS BROADCASTING TO OTHERS',
+                'RESPONDING: SOS KEEPS BROADCASTING TO OTHERS',
                 style: TextStyle(
                   color: p.error,
                   fontFamily: 'monospace',
@@ -288,6 +340,9 @@ class _RadarScreenState extends State<RadarScreen>
               style: OutlinedButton.styleFrom(
                 foregroundColor: p.primary,
                 side: BorderSide(color: p.primaryDim),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.zero,
+                ),
                 padding: const EdgeInsets.symmetric(vertical: 12),
               ),
             ),
@@ -374,9 +429,58 @@ String _cardinal(double deg) {
   return dirs[((deg + 22.5) % 360) ~/ 45];
 }
 
+/// Perceived signal quality as a percent, mapping raw dBm onto a human
+/// scale: -55 dBm reads 100%, -110 dBm reads 10%, linear in between.
+/// A stand-in without a calibrated RSSI curve, but far more readable than
+/// a raw dBm number and stable enough for direction-of-approach.
+int _rssiPercent(int rssi) {
+  if (rssi >= -55) return 100;
+  if (rssi <= -110) return 10;
+  return (10 + ((rssi + 110) / 55 * 90)).round();
+}
+
+String _signalWord(int pct) {
+  if (pct >= 80) return 'STRONG';
+  if (pct >= 55) return 'GOOD';
+  if (pct >= 35) return 'FAIR';
+  return 'WEAK';
+}
+
+/// Five-bar signal meter. Filled bars scale with the percent, so the readout
+/// survives being read from a few metres away.
+class _SignalBars extends StatelessWidget {
+  const _SignalBars({required this.percent, required this.color});
+
+  final int percent;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    final filled = (percent / 20).ceil().clamp(0, 5);
+    const heights = [6.0, 9.0, 12.0, 15.0, 18.0];
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        for (var i = 0; i < 5; i++)
+          Container(
+            width: 5,
+            height: heights[i],
+            margin: const EdgeInsets.only(right: 2),
+            decoration: BoxDecoration(
+              color: i < filled
+                  ? color
+                  : color.withValues(alpha: 0.22),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
 /// Find-My style dial: concentric rings with cardinal labels, you at the
 /// centre, and the target at (bearing − heading) so "up" is where you face.
-/// No rotating sweep — just a breathing pulse so the screen reads at a glance.
+/// No rotating sweep: just a breathing pulse so the screen reads at a glance.
 class _RadarDial extends StatelessWidget {
   const _RadarDial({
     required this.pulse,
@@ -434,64 +538,121 @@ class _RadarPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final cx = size.width / 2;
     final cy = size.height / 2;
-    final radius = min(size.width, size.height) / 2 - 30;
+    final radius = min(size.width, size.height) / 2 - 36;
     final center = Offset(cx, cy);
+    // The bezel swings opposite the heading so the marks you see ahead of
+    // you are the ones you are actually facing, like a real magnetic
+    // compass held flat.
+    final bezel = -(heading ?? 0) * pi / 180;
 
-    // Concentric rings with cardinal labels (north = up when heading known).
+    canvas.save();
+    canvas.translate(center.dx, center.dy);
+    canvas.rotate(bezel);
+    canvas.translate(-center.dx, -center.dy);
+
+    // Degree ticks every 15 deg, taller at cardinals and intercardinals.
+    for (var a = 0; a < 360; a += 15) {
+      final cardinal = a % 90 == 0;
+      final major = a % 45 == 0;
+      final rad = a * pi / 180;
+      final inner = radius * (cardinal ? 0.86 : major ? 0.91 : 0.95);
+      canvas.drawLine(
+        center + Offset(sin(rad), -cos(rad)) * inner,
+        center + Offset(sin(rad), -cos(rad)) * radius,
+        Paint()
+          ..color = cardinal
+                ? palette.primary.withValues(alpha: 0.9)
+                : palette.primaryDim.withValues(alpha: 0.35)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = cardinal ? 2 : 1,
+      );
+    }
+
+    // Concentric rings; outermost is the accent frame.
     for (var i = 1; i <= 3; i++) {
       canvas.drawCircle(
         center,
         radius * i / 3,
         Paint()
-          ..color = palette.grid
-          ..style = PaintingStyle.stroke,
-      );
-    }
-    final tp = TextPainter(textDirection: TextDirection.ltr);
-    for (final (label, angle) in const [
-      ('N', 0.0),
-      ('E', pi / 2),
-      ('S', pi),
-      ('W', 3 * pi / 2),
-    ]) {
-      tp.text = TextSpan(
-        text: label,
-        style: TextStyle(color: palette.textDim, fontSize: 11),
-      );
-      tp.layout();
-      tp.paint(
-        canvas,
-        center +
-            Offset((radius + 14) * sin(angle), -(radius + 14) * cos(angle)) -
-            Offset(tp.width / 2, tp.height / 2),
+          ..color = i == 3 ? palette.primaryDim : palette.grid
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = i == 3 ? 2.5 : 1.5,
       );
     }
 
-    // Heading triangle: points up so "top of dial = where you face".
+    // Cardinal letters ride the rotating bezel, each glyph set upright in
+    // its own slot like a physical compass rose.
+    final tp = TextPainter(textDirection: TextDirection.ltr);
+    const labels = [
+      ('N', 0.0, true),
+      ('E', pi / 2, false),
+      ('S', pi, false),
+      ('W', 3 * pi / 2, false),
+    ];
+    for (final (label, angle, primary) in labels) {
+      canvas.save();
+      canvas.translate(
+        center.dx + (radius + 16) * sin(angle),
+        center.dy - (radius + 16) * cos(angle),
+      );
+      canvas.rotate(angle);
+      tp.text = TextSpan(
+        text: label,
+        style: TextStyle(
+          color: primary ? palette.primary : palette.text,
+          fontSize: primary ? 20 : 15,
+          fontWeight: FontWeight.bold,
+        ),
+      );
+      tp.layout();
+      tp.paint(canvas, Offset(-tp.width / 2, -tp.height / 2));
+      canvas.restore();
+    }
+    canvas.restore();
+
+    // Field-of-view wedge: a soft 60 deg arc showing where "forward" is.
     if (heading != null) {
+      final sweepPaint = Paint()
+        ..shader = SweepGradient(
+          startAngle: -pi / 2 - pi / 6,
+          endAngle: -pi / 2 + pi / 6,
+          colors: [
+            palette.primary.withValues(alpha: 0.0),
+            palette.primary.withValues(alpha: 0.14),
+            palette.primary.withValues(alpha: 0.0),
+          ],
+          transform: GradientRotation(bezel + pi / 6),
+        ).createShader(Rect.fromCircle(center: center, radius: radius))
+        ..style = PaintingStyle.fill;
+      canvas.drawCircle(center, radius, sweepPaint);
+
+      // Fixed lubber line: the little nose triangle stays screen-up and
+      // always reads "you are facing this way".
       final path = Path()
-        ..moveTo(cx - 8, cy - radius - 20)
-        ..lineTo(cx + 8, cy - radius - 20)
-        ..lineTo(cx, cy - radius - 32)
+        ..moveTo(cx - 10, cy - radius - 24)
+        ..lineTo(cx + 10, cy - radius - 24)
+        ..lineTo(cx, cy - radius - 40)
         ..close();
       canvas.drawPath(path, Paint()..color = palette.primary);
     }
 
-    // You at the centre.
-    canvas.drawCircle(center, 6, Paint()..color = palette.secondary);
+    // You at the centre: filled disc + wide ring so the own position stays
+    // visible while the target pulses.
+    canvas.drawCircle(center, 7, Paint()..color = palette.secondary);
     canvas.drawCircle(
       center,
-      11,
+      14,
       Paint()
         ..color = palette.secondary
-        ..style = PaintingStyle.stroke,
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.5,
     );
 
     if (!hasBearing) {
       // No direction possible: show a fixed blip so the dial doesn't lie.
       canvas.drawCircle(
         center + Offset(0, -radius * 0.5),
-        7,
+        9,
         Paint()..color = palette.error,
       );
       return;
@@ -505,21 +666,34 @@ class _RadarPainter extends CustomPainter {
     final r = radius * (1 - pow(0.5, d / 80).toDouble());
     final blip = center + Offset(sin(angle), -cos(angle)) * r;
 
-    // Breathing pulse around the target, like a sonar ping.
-    final pingR = 8 + 10 * sin(progress * 2 * pi);
+    // Solid bearing line, then a sonar double-ping around the target with a
+    // white core so the marker holds up against any tile colour.
+    canvas.drawLine(
+      center,
+      blip,
+      Paint()
+        ..color = palette.error.withValues(alpha: 0.55)
+        ..strokeWidth = 2,
+    );
+    final pingR = 10 + 12 * sin(progress * 2 * pi);
     canvas.drawCircle(
       blip,
       pingR,
       Paint()
-        ..color = palette.error.withValues(alpha: 0.35)
-        ..style = PaintingStyle.stroke,
+        ..color = palette.error.withValues(alpha: 0.45)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2.5,
     );
-    canvas.drawCircle(blip, 7, Paint()..color = palette.error);
-    canvas.drawLine(
-      center,
+    canvas.drawCircle(
       blip,
-      Paint()..color = palette.error.withValues(alpha: 0.4),
+      pingR * 0.6,
+      Paint()
+        ..color = palette.error.withValues(alpha: 0.25)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2,
     );
+    canvas.drawCircle(blip, 9, Paint()..color = palette.error);
+    canvas.drawCircle(blip, 3.5, Paint()..color = Colors.white);
   }
 
   @override
@@ -548,23 +722,37 @@ class _RespondButton extends StatelessWidget {
     return InkWell(
       onTap: onPressed,
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
         decoration: BoxDecoration(
           color: active ? palette.error : Colors.transparent,
           border: Border.all(
             color: active ? palette.error : palette.primaryDim,
+            width: 1,
           ),
-          borderRadius: BorderRadius.circular(4),
+          borderRadius: BorderRadius.zero,
         ),
-        child: Text(
-          active ? 'RESPONDING' : 'RESPOND',
-          style: TextStyle(
-            color: active ? Colors.white : palette.primary,
-            fontFamily: 'monospace',
-            fontSize: 11,
-            fontWeight: FontWeight.bold,
-            letterSpacing: 1,
-          ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (active) ...[
+              Icon(
+                Icons.check_circle,
+                color: onColor(palette.error),
+                size: 13,
+              ),
+              const SizedBox(width: 5),
+            ],
+            Text(
+              active ? 'RESPONDING' : 'RESPOND',
+              style: TextStyle(
+                color: active ? onColor(palette.error) : palette.primary,
+                fontFamily: 'monospace',
+                fontSize: 11,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 1,
+              ),
+            ),
+          ],
         ),
       ),
     );

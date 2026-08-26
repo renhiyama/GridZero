@@ -3,8 +3,8 @@ import 'dart:convert';
 import 'package:crypto/crypto.dart';
 import 'package:gridzero/core/app_state.dart';
 import 'package:gridzero/core/ledger/ledger_store.dart';
-import 'package:gridzero/core/master_key.dart';
 import 'package:gridzero/core/mesh_packet.dart';
+import 'package:gridzero/core/provision_packet.dart';
 import 'package:gridzero/core/totp.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -39,21 +39,53 @@ void main() {
 
   setUp(() => SharedPreferences.setMockInitialValues({}));
 
-  test('family card payload parses and verifies signature', () async {
-    final check = await verifyFamilyCard(payload: kSampleFamilyCardPayload);
-    expect(check.ok, isTrue);
-    expect(check.card!.familyId, 'FAM-DEADBEEF');
-    expect(check.card!.rationCode, 'Rice');
-    expect(check.card!.dailyUnits, 4.0);
-    expect(check.card!.memberCitizenIds, [m1, m2]);
+  test('family card payload encodes and decodes through the v2 envelope', () {
+    final payload = encodeFamilyCardProvision(
+      familyId: 'FAM-TEST',
+      rationCode: 'Rice',
+      dailyUnits: 4.0,
+      memberIds: [m1, m2],
+    );
+    final card = decodeFamilyCardProvision(payload);
+    expect(card, isNotNull);
+    expect(card!.familyId, 'FAM-TEST');
+    expect(card.rationCode, 'Rice');
+    expect(card.dailyUnits, 4.0);
+    expect(card.memberIds, [m1, m2]);
   });
 
-  test('enlistFamily caches a verified card in the ledger', () async {
+  test('expired and wrong-type family payloads are rejected', () {
+    final stale = encodeFamilyCardProvision(
+      familyId: 'FAM-OLD',
+      rationCode: 'Rice',
+      dailyUnits: 1.0,
+      memberIds: [m1],
+      expiresInSeconds: 3600,
+      now: DateTime.now().millisecondsSinceEpoch ~/ 1000 - 7200,
+    );
+    expect(decodeFamilyCardProvision(stale), isNull);
+
+    final account = encodeAccountProvision(
+      purpose: ProvisionPurpose.officer,
+      username: 'NAVIN',
+      passwordHash: List.filled(64, 'a').join(),
+    );
+    expect(decodeFamilyCardProvision(account), isNull);
+  });
+
+  test('provisionFamilyCard caches a card in the ledger', () async {
     final app = makeState();
     await app.init();
-    final check = await app.enlistFamily(kSampleFamilyCardPayload);
-    expect(check.ok, isTrue);
-    final card = await app.ledger.familyCard('FAM-DEADBEEF');
+    final err = await app.provisionFamilyCard(
+      encodeFamilyCardProvision(
+        familyId: 'FAM-TEST',
+        rationCode: 'Rice',
+        dailyUnits: 4.0,
+        memberIds: [m1, m2],
+      ),
+    );
+    expect(err, isNull);
+    final card = await app.ledger.familyCard('FAM-TEST');
     expect(card, isNotNull);
     expect(card!.memberCitizenIds, contains(m1));
     app.dispose();
@@ -62,7 +94,7 @@ void main() {
   test('fractional claim draws against family card daily cap', () async {
     final officer = makeState();
     await officer.init();
-    await officer.enlistOfficer(kSampleMasterKeyPayload);
+    await officer.register('OFF1', 'pass', Role.officer);
     await officer.ledger.upsertFamilyCard(
       FamilyCard(
         familyId: 'FAM-TEST',
@@ -99,7 +131,7 @@ void main() {
   test('family claims reject unknown card and non-member', () async {
     final officer = makeState();
     await officer.init();
-    await officer.enlistOfficer(kSampleMasterKeyPayload);
+    await officer.register('OFF1', 'pass', Role.officer);
     await officer.ledger.upsertFamilyCard(
       FamilyCard(
         familyId: 'FAM-TEST',
@@ -127,7 +159,7 @@ void main() {
   test('PIN fallback verifies when TOTP window is stale', () async {
     final officer = makeState();
     await officer.init();
-    await officer.enlistOfficer(kSampleMasterKeyPayload);
+    await officer.register('OFF1', 'pass', Role.officer);
 
     // TOTP token from a past window so the primary check fails.
     final staleWindow = totpTimeWindow(DateTime.now()) - 3;

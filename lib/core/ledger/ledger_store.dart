@@ -2,6 +2,7 @@
 library;
 
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
 
@@ -182,6 +183,86 @@ class FamilyCard {
   );
 }
 
+/// A registered officer identity: public signing key plus when and through
+/// which channel they enlisted. Public keys only: private signing material
+/// never enters this directory. At-rest encryption of the directory is a
+/// planned follow-up; public keys are not secret, so plaintext today.
+class OfficerRecord {
+  OfficerRecord({
+    required this.officerId,
+    required this.publicKey,
+    required this.enlistedAt,
+    this.registeredBy,
+  });
+
+  final String officerId;
+
+  /// Base64 of the 65-byte uncompressed P-256 public key.
+  final String publicKey;
+
+  /// Unix seconds when the officer was enrolled.
+  final int enlistedAt;
+
+  /// Enlistment channel: 'REGISTER' (local account) or 'OFF-PROVISION'
+  /// (HQ-issued provisioning QR).
+  final String? registeredBy;
+
+  Map<String, Object?> toMap() => {
+    'officer_id': officerId,
+    'signer_public': publicKey,
+    'enlisted_at': enlistedAt,
+    'registered_by': registeredBy,
+  };
+
+  static OfficerRecord fromMap(Map<String, Object?> map) => OfficerRecord(
+    officerId: map['officer_id'] as String,
+    publicKey: map['signer_public'] as String,
+    enlistedAt: (map['enlisted_at'] as num).toInt(),
+    registeredBy: map['registered_by'] as String?,
+  );
+}
+
+/// A verified officer-signed point of interest, persisted so restarts and
+/// rebroadcasts never duplicate or lose entries. Primary key: officer+label.
+class LandmarkRecord {
+  LandmarkRecord({
+    required this.officerId,
+    required this.label,
+    required this.typeCode,
+    required this.latitude,
+    required this.longitude,
+    required this.expiresAt,
+  });
+
+  final String officerId;
+  final String label;
+  final int typeCode;
+  final double latitude;
+  final double longitude;
+  final int expiresAt; // unix seconds
+
+  bool get isExpired =>
+      DateTime.now().millisecondsSinceEpoch ~/ 1000 >= expiresAt;
+
+  Map<String, Object?> toMap() => {
+        'officer_id': officerId,
+        'label': label,
+        'type_code': typeCode,
+        'lat': latitude,
+        'lon': longitude,
+        'expires_at': expiresAt,
+      };
+
+  static LandmarkRecord fromMap(Map<String, Object?> m) => LandmarkRecord(
+        officerId: m['officer_id'] as String,
+        label: m['label'] as String,
+        typeCode: (m['type_code'] as num).toInt(),
+        latitude: (m['lat'] as num).toDouble(),
+        longitude: (m['lon'] as num).toDouble(),
+        expiresAt: (m['expires_at'] as num).toInt(),
+      );
+}
+
 /// Persistence contract used by both the SQLite and in-memory backends.
 abstract class LedgerStore {
   Future<void> close();
@@ -244,6 +325,19 @@ abstract class LedgerStore {
     List<int> privateKey,
   );
 
+  /// Enrolment directory: records an officer identity (public key only).
+  Future<void> upsertOfficer(OfficerRecord officer);
+
+  /// Insert-or-replace by (officer_id, label): rebroadcasts of a landmark
+  /// already stored refresh it instead of duplicating.
+  Future<void> upsertLandmark(LandmarkRecord landmark);
+
+  /// All stored landmarks, including expired ones (callers filter).
+  Future<List<LandmarkRecord>> landmarks();
+
+  /// Every locally registered officer, newest first.
+  Future<List<OfficerRecord>> officers();
+
   /// Tier-2 family ration cards (Schema v3): provisioned by HQ, verified by
   /// any terminal that holds the card, capped by [familyUsedUnits].
   Future<void> upsertFamilyCard(FamilyCard card);
@@ -255,4 +349,22 @@ abstract class LedgerStore {
   /// Total units already drawn against a card in the given UTC day (epoch
   /// seconds at day start), summed over local and mesh-synced claims.
   Future<double> familyUsedUnits(String familyId, int dayStartEpoch);
+
+  /// Face embedding captured at enrolment, keyed by citizen id. Stored as raw
+  /// L2-normalized float bytes; embeddings are biometric data and never leave
+  /// the device.
+  Future<void> saveFaceEmbedding(String citizenId, Float32List embedding);
+
+  Future<Float32List?> faceEmbedding(String citizenId);
+
+  /// Full DB snapshot as a JSON string, for the officer/hotspot DB sync
+  /// channel. Includes records, family cards, revocations, the officer
+  /// registry and face embeddings so a freshly synced phone is a true clone.
+  Future<String> exportSnapshot();
+
+  /// Replaces nothing: merges a snapshot produced by [exportSnapshot] into
+  /// this store. Records are absorbed via [mergeRecord] so the local chain is
+  /// never rewritten; reference rows are upserted. Returns an error string on
+  /// malformed input, else null.
+  Future<String?> importSnapshot(String json);
 }

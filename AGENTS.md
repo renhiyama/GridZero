@@ -17,6 +17,12 @@ Agent work here. Follow tribe rules. No break cave.
 * Run linter.
 * **All must pass.** Red light = bad. Green light = good.
 
+## 2b. Both Sides Rule
+
+* Any feature touching admin (HQ laptop) AND client (phone) sides: **update both ends** in the same change — UI copy, flows, and fallback paths on each side that the feature touches.
+* When adding a new mechanism (e.g. BLE announce replacing QR), actively remove/deprecate the old UI it replaces on the other side, or say why it stays.
+* Check `lib/ui/register_screen.dart` + `lib/ui/officer_screen.dart` + `lib/ui/directory_screen.dart` (admin) against `lib/ui/officer_screen.dart` + `lib/ui/citizen_screen.dart` + `lib/ui/login_screen.dart` (client) before calling it done.
+
 ---
 
 ## 3. Forbidden Things (Bad! No do!)

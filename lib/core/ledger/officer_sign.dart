@@ -1,11 +1,13 @@
 /// Officer block signing for the relief ledger (FEAT-LEDG-03 / step 2).
 ///
 /// pointycastle ships no Ed25519, so officer signatures use ECDSA-P256
-/// (prime256v1) with SHA-256 and deterministic RFC-6979 k — no RNG on the
+/// (prime256v1) with SHA-256 and deterministic RFC-6979 k: no RNG on the
 /// signing path, and the same 64-byte signature format everywhere.
 library;
 
 import 'dart:convert';
+
+import 'package:crypto/crypto.dart';
 import 'dart:math';
 import 'dart:typed_data';
 
@@ -91,4 +93,21 @@ SecureRandom _seededRandom() {
     ),
   );
   return rng;
+}
+
+/// Deterministic signing key derived from an account's password hash.
+///
+/// Random per-device officer keys cannot work in a mesh where any device may
+/// sign records: every verifier needs the SAME public key in its registry,
+/// but there is no channel that ships private keys around. Both sides derive
+/// identical keys from the password hash they already share (HQ issued it,
+/// the device stores it), exactly like the link OTP scheme.
+(List<int> publicKey, List<int> privateKey) deriveOfficerKey(
+  String passwordHash,
+) {
+  final digest = sha256.convert(utf8.encode('gridzero:sign:$passwordHash'));
+  final d = _bytesToBigInt(digest.bytes);
+  final params = ECDomainParameters(kOfficerCurve);
+  final q = params.G * d;
+  return (q!.getEncoded(false).toList(), digest.bytes.toList());
 }

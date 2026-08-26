@@ -42,8 +42,9 @@ class MeshNodeState {
       case MeshPacketType.ledgerRecord:
       case MeshPacketType.ledgerSyncRequest:
       case MeshPacketType.revocationAlert:
-      case MeshPacketType.accountRecord:
-      case MeshPacketType.accountRequest:
+      case MeshPacketType.chat:
+      case MeshPacketType.announce:
+      case MeshPacketType.respond:
         return;
       case MeshPacketType.sosBeacon:
       case MeshPacketType.relayStatus:
@@ -62,6 +63,11 @@ class MeshNodeState {
         hasSos = true;
         sosExpiryEpoch = DateTime.now().millisecondsSinceEpoch + _sosLeaseMs;
       }
+    } else if (p.type == MeshPacketType.relayStatus && hasSos) {
+      // The originator swaps the heartbeat from SOS beacon to plain relay
+      // status the moment SOS is deactivated, so a non-SOS announce proves
+      // the alarm is off even if the one-shot cleared beacon was dropped.
+      clearSos();
     }
   }
 

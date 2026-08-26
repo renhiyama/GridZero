@@ -1,5 +1,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <!-- Air-gapped BLE mesh: advertise (peripheral) + scan (central) + connect. -->
+    <!-- Legacy pair required by Android 8–11; capped so it vanishes on 12+. -->
+    <uses-permission android:name="android.permission.BLUETOOTH"
+        android:maxSdkVersion="30"/>
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN"
+        android:maxSdkVersion="30"/>
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
         android:usesPermissionFlags="neverForLocation"/>
     <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE"/>
@@ -8,6 +13,16 @@
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
     <uses-permission android:name="android.permission.CAMERA"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <!-- Android 12+ requires this for the accelerometer at game-rate
+         (sensors_plus requests 0us); it is an install-time normal permission. -->
+    <uses-permission android:name="android.permission.HIGH_SAMPLING_RATE_SENSORS"/>
+    <!-- Android 13+ requires NEARBY_WIFI_DEVICES (runtime) to start a
+         LocalOnlyHotspot for the officer DB sync bridge. -->
+    <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES"
+        android:usesPermissionFlags="neverForLocation"/>
+    <!-- Joining HQ's hosted link via network suggestions needs this
+         install-time permission. -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE"/>
     <!-- OSM map tiles are fetched when online; mesh still works offline. -->
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="true"/>

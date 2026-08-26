@@ -1,6 +1,9 @@
 /// SQLite hash-chain ledger backend (FR-3). Schema mirrors docs/REQ.md 2.2.
 library;
 
+import 'dart:typed_data';
+import 'dart:convert';
+
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'ledger_store.dart';
@@ -77,6 +80,36 @@ CREATE TABLE IF NOT EXISTS family_cards (
 );
 ''';
 
+/// v5 additions: officer enrolment directory. Public signing keys only; the
+/// private half stays in `officer_keys`. At-rest encryption is planned.
+const String kLedgerSchemaV5 = '''
+CREATE TABLE IF NOT EXISTS officer_registry (
+    officer_id TEXT PRIMARY KEY,
+    signer_public TEXT NOT NULL,
+    enlisted_at INTEGER NOT NULL,
+    registered_by TEXT
+);
+        CREATE TABLE IF NOT EXISTS landmarks (
+          officer_id TEXT NOT NULL,
+          label TEXT NOT NULL,
+          type_code INTEGER NOT NULL,
+          lat REAL NOT NULL,
+          lon REAL NOT NULL,
+          expires_at INTEGER NOT NULL,
+          PRIMARY KEY (officer_id, label)
+        );
+''';
+
+/// v6 addition: per-citizen face embeddings from enrolment. Stored as raw
+/// L2-normalized float32 bytes; local-only biometric data.
+const String kLedgerSchemaV6 = '''
+CREATE TABLE IF NOT EXISTS face_embeddings (
+    citizen_id TEXT PRIMARY KEY,
+    embedding BLOB NOT NULL,
+    enrolled_at INTEGER NOT NULL
+);
+''';
+
 class SqliteLedgerStore implements LedgerStore {
   SqliteLedgerStore(this._db, this._path);
 
@@ -87,18 +120,23 @@ class SqliteLedgerStore implements LedgerStore {
     final db = await factory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 4,
+        version: 6,
         onCreate: (db, _) async {
           await db.execute(kLedgerSchema);
           await _applyV3(db);
           await _applyV4(db);
+          await _applyV5(db);
+          await _applyV6(db);
         },
         // v1 DBs predate sync_records; CREATE IF NOT EXISTS upgrades in place.
-        // v2->v3 adds signatures + revocation tables; v3->v4 adds families.
+        // v2->v3 adds signatures + revocation tables; v3->v4 adds families;
+        // v4->v5 adds the officer directory; v5->v6 adds face embeddings.
         onUpgrade: (db, oldVersion, _) async {
           await db.execute(kLedgerSchema);
           if (oldVersion < 3) await _applyV3(db);
           if (oldVersion < 4) await _applyV4(db);
+          if (oldVersion < 5) await _applyV5(db);
+          if (oldVersion < 6) await _applyV6(db);
         },
       ),
     );
@@ -115,7 +153,7 @@ class SqliteLedgerStore implements LedgerStore {
       try {
         await db.execute(trimmed);
       } on Exception {
-        // column already present, or table exists — nothing to migrate.
+        // column already present, or table exists: nothing to migrate.
       }
     }
   }
@@ -129,7 +167,34 @@ class SqliteLedgerStore implements LedgerStore {
       try {
         await db.execute(trimmed);
       } on Exception {
-        // column already present, or table exists — nothing to migrate.
+        // column already present, or table exists: nothing to migrate.
+      }
+    }
+  }
+
+  /// v5 migration, same best-effort semantics.
+  static Future<void> _applyV5(Database db) async {
+    final statements = kLedgerSchemaV5.split(';');
+    for (final stmt in statements) {
+      final trimmed = stmt.trim();
+      if (trimmed.isEmpty) continue;
+      try {
+        await db.execute(trimmed);
+      } on Exception {
+        // table already present: nothing to migrate.
+      }
+    }
+  }
+
+  static Future<void> _applyV6(Database db) async {
+    final statements = kLedgerSchemaV6.split(';');
+    for (final stmt in statements) {
+      final trimmed = stmt.trim();
+      if (trimmed.isEmpty) continue;
+      try {
+        await db.execute(trimmed);
+      } on Exception {
+        // table already present: nothing to migrate.
       }
     }
   }
@@ -348,11 +413,45 @@ class SqliteLedgerStore implements LedgerStore {
     List<int> publicKey,
     List<int> privateKey,
   ) async {
+    // sqflite blob columns require Uint8List, not List<int>.
     await _db.insert('officer_keys', {
       'officer_id': officerId,
-      'signer_public': publicKey,
-      'signer_private': privateKey,
+      'signer_public': Uint8List.fromList(publicKey),
+      'signer_private': Uint8List.fromList(privateKey),
     }, conflictAlgorithm: ConflictAlgorithm.replace);
+  }
+
+  @override
+  Future<void> upsertOfficer(OfficerRecord officer) async {
+    await _db.insert(
+      'officer_registry',
+      officer.toMap(),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  @override
+  Future<List<OfficerRecord>> officers() async {
+    final rows = await _db.query(
+      'officer_registry',
+      orderBy: 'enlisted_at DESC',
+    );
+    return rows.map(OfficerRecord.fromMap).toList();
+  }
+
+  @override
+  Future<void> upsertLandmark(LandmarkRecord landmark) async {
+    await _db.insert(
+      'landmarks',
+      landmark.toMap(),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  @override
+  Future<List<LandmarkRecord>> landmarks() async {
+    final rows = await _db.query('landmarks');
+    return rows.map(LandmarkRecord.fromMap).toList();
   }
 
   @override
@@ -401,5 +500,154 @@ class SqliteLedgerStore implements LedgerStore {
       ],
     );
     return (rows.first['used'] as num).toDouble();
+  }
+
+  @override
+  Future<void> saveFaceEmbedding(String citizenId, Float32List embedding) async {
+    final bytes = ByteData.sublistView(embedding).buffer.asUint8List();
+    await _db.insert(
+      'face_embeddings',
+      {
+        'citizen_id': citizenId,
+        'embedding': bytes,
+        'enrolled_at': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  @override
+  Future<Float32List?> faceEmbedding(String citizenId) async {
+    final rows = await _db.query(
+      'face_embeddings',
+      where: 'citizen_id = ?',
+      whereArgs: [citizenId],
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    final blob = rows.first['embedding'] as Uint8List?;
+    if (blob == null || blob.isEmpty) return null;
+    return Float32List.sublistView(ByteData.sublistView(blob));
+  }
+
+  @override
+  Future<String> exportSnapshot() async {
+    final records = await allRecords();
+    final revs = await revocations();
+    final offs = await officers();
+    final fams = await familyCards();
+    final embRows = await _db.query('face_embeddings');
+    return jsonEncode({
+      'v': 1,
+      'records': [for (final r in records) r.toMap()],
+      'revocations': [
+        for (final e in revs)
+          {
+            'citizen_id': e.citizenId,
+            'reason_code': e.reasonCode,
+            'issued_at': e.issuedAt,
+            'source_node': e.sourceNode,
+          },
+      ],
+      'officers': [for (final o in offs) o.toMap()],
+      'family_cards': [for (final c in fams) c.toMap()],
+      'face_embeddings': [
+        for (final row in embRows)
+          {
+            'citizen_id': row['citizen_id'],
+            'embedding': base64Encode(row['embedding'] as List<int>),
+          },
+      ],
+    });
+  }
+
+  @override
+  Future<String?> importSnapshot(String json) async {
+    final Object? decoded;
+    try {
+      decoded = jsonDecode(json);
+    } catch (_) {
+      return 'malformed DB snapshot';
+    }
+    if (decoded is! Map<String, Object?>) return 'malformed DB snapshot';
+    if (decoded['v'] != 1) return 'unsupported snapshot version';
+    final records = decoded['records'] as List? ?? const [];
+    final familyCards = decoded['family_cards'] as List? ?? const [];
+    final revocations = decoded['revocations'] as List? ?? const [];
+    final officers = decoded['officers'] as List? ?? const [];
+    final faceEmbeddings = decoded['face_embeddings'] as List? ?? const [];
+    try {
+      await _db.transaction((txn) async {
+        for (final raw in records) {
+          final m = Map<String, Object?>.from(raw as Map);
+          await txn.insert(
+            'sync_records',
+            {
+              'record_id': m['record_id'],
+              'citizen_id': m['citizen_id'],
+              'ration_code': m['ration_code'],
+              'claimed_at': m['claimed_at'],
+              'officer_id': m['officer_id'],
+              'claim_units': m['claim_units'] ?? 1.0,
+              'family_id': m['family_id'],
+              'received_from': 0,
+              'received_at': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+            },
+            conflictAlgorithm: ConflictAlgorithm.ignore,
+          );
+        }
+        for (final raw in familyCards) {
+          final m = Map<String, Object?>.from(raw as Map);
+          await txn.insert(
+            'family_cards',
+            {
+              'family_id': m['family_id'],
+              'ration_code': m['ration_code'],
+              'daily_units': m['daily_units'],
+              'member_ids': m['member_ids'],
+            },
+            conflictAlgorithm: ConflictAlgorithm.replace,
+          );
+        }
+        for (final raw in revocations) {
+          final m = Map<String, Object?>.from(raw as Map);
+          await txn.insert(
+            'revocations',
+            {
+              'citizen_id': m['citizen_id'],
+              'reason_code': m['reason_code'],
+              'issued_at': m['issued_at'],
+              'source_node': m['source_node'],
+            },
+            conflictAlgorithm: ConflictAlgorithm.replace,
+          );
+        }
+        for (final raw in officers) {
+          final m = Map<String, Object?>.from(raw as Map);
+          await txn.insert(
+            'officer_registry',
+            m,
+            conflictAlgorithm: ConflictAlgorithm.replace,
+          );
+        }
+        for (final raw in faceEmbeddings) {
+          final m = Map<String, Object?>.from(raw as Map);
+          final citizenId = m['citizen_id'] as String;
+          final embedding = base64Decode(m['embedding'] as String);
+          await txn.insert(
+            'face_embeddings',
+            {
+              'citizen_id': citizenId,
+              'embedding': embedding,
+              'enrolled_at': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+            },
+            conflictAlgorithm: ConflictAlgorithm.replace,
+          );
+        }
+      });
+      return null;
+    } on Exception catch (e) {
+      return 'snapshot import failed: $e';
+    }
   }
 }

@@ -4,7 +4,6 @@ library;
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:qr_flutter/qr_flutter.dart';
 
 import '../app_scope.dart';
 import '../core/mesh/mesh_node.dart';
@@ -44,13 +43,15 @@ class _CitizenScreenState extends State<CitizenScreen> {
         totpWindowSeconds -
         (DateTime.now().millisecondsSinceEpoch ~/ 1000) % totpWindowSeconds;
 
-    return SafeArea(
+    // Presentation mode enlarges the body so it reads clearly to citizens,
+    // judges and older users; the technical readouts are hidden elsewhere.
+    Widget body = SafeArea(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           _Header(app: app),
           Expanded(
-            child: ListView(
+            child: HudScroll(
               padding: const EdgeInsets.fromLTRB(12, 12, 12, 88),
               children: [
                 HudPanel(
@@ -60,12 +61,14 @@ class _CitizenScreenState extends State<CitizenScreen> {
                 ),
                 const SizedBox(height: 12),
                 HudPanel(
-                  title: 'IDENTITY CARD  /  TIER-1 + TIER-2',
+                  title: 'AADHAAR + RATION CARD',
                   child: _IdentityCard(app: app),
                 ),
                 const SizedBox(height: 12),
                 HudPanel(
-                  title: 'DYNAMIC RATION QR  /  TOKEN ROTATES ${secondsLeft}s',
+                  title: app.showDebugInfo
+                      ? 'DYNAMIC RATION QR  /  TOKEN ROTATES ${secondsLeft}s'
+                      : 'RATION QR  /  REFRESHES IN ${secondsLeft}s',
                   child: _DynamicQr(app: app, secondsLeft: secondsLeft),
                 ),
                 const SizedBox(height: 12),
@@ -84,6 +87,14 @@ class _CitizenScreenState extends State<CitizenScreen> {
         ],
       ),
     );
+    if (!app.showDebugInfo) {
+      body = MediaQuery(
+        data: MediaQuery.of(context)
+            .copyWith(textScaler: const TextScaler.linear(1.15)),
+        child: body,
+      );
+    }
+    return body;
   }
 }
 
@@ -106,7 +117,7 @@ class _Header extends StatelessWidget {
               color: p.primary.withValues(alpha: 0.12),
             ),
             child: Text(
-              'CITIZEN ▸ ${app.citizenId}',
+              app.showDebugInfo ? 'AADHAAR ▸ ${app.citizenId}' : 'CITIZEN',
               style: TextStyle(
                 color: p.primary,
                 fontFamily: 'monospace',
@@ -116,14 +127,15 @@ class _Header extends StatelessWidget {
             ),
           ),
           const Spacer(),
-          Text(
-            'NODE ${app.mesh.nodeId.toRadixString(16).padLeft(4, '0').toUpperCase()}',
-            style: TextStyle(
-              color: p.textDim,
-              fontFamily: 'monospace',
-              fontSize: 11,
+          if (app.showDebugInfo)
+            Text(
+              'NODE ${app.mesh.nodeId.toRadixString(16).padLeft(4, '0').toUpperCase()}',
+              style: TextStyle(
+                color: p.textDim,
+                fontFamily: 'monospace',
+                fontSize: 11,
+              ),
             ),
-          ),
         ],
       ),
     );
@@ -229,25 +241,49 @@ class _SosPanel extends StatelessWidget {
             padding: const EdgeInsets.symmetric(vertical: 16),
           ),
           onPressed: () => app.setSosActive(!app.sosActive),
-          child: Text(
-            app.sosActive ? '■ CANCEL SOS BEACON' : '► ACTIVATE SOS BEACON',
-            style: const TextStyle(
-              fontFamily: 'monospace',
-              fontWeight: FontWeight.bold,
-              letterSpacing: 2,
-            ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                app.sosActive ? Icons.stop_circle : Icons.emergency,
+                size: 20,
+              ),
+              const SizedBox(width: 8),
+              // Scale down (never wrap or ellipsize) when the label runs out
+              // of room: e.g. presentation text scaling on a narrow screen.
+              Flexible(
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: Text(
+                    app.sosActive ? 'CANCEL SOS BEACON' : 'ACTIVATE SOS BEACON',
+                    style: const TextStyle(
+                      fontFamily: 'monospace',
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 2,
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
         const SizedBox(height: 8),
-        HduReadout(
-          'PACKET',
-          '18B TTL5 TYPE=0x01 TRIAGE=${flags.value.toString().padLeft(2, '0')}',
-        ),
-        if (app.sosActive)
+        if (app.showDebugInfo)
+          HduReadout(
+            'PACKET',
+            '18B TTL5 TYPE=0x01 TRIAGE=${flags.value.toString().padLeft(2, '0')}',
+          ),
+        if (app.sosActive) ...[
           Padding(
             padding: const EdgeInsets.only(top: 8),
-            child: HudAlertBar('SOS ACTIVE — broadcasting every 30s via mesh'),
+            child: HudAlertBar(
+              app.mesh?.responders.isNotEmpty == true
+                  ? 'HELP ON THE WAY: ${app.mesh!.responders.length} '
+                      'RESPONDER(S) TRACKING YOU'
+                  : 'SOS ACTIVE: broadcasting via mesh',
+            ),
           ),
+        ],
       ],
     );
   }
@@ -355,14 +391,15 @@ class _IdentityCard extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 2),
-                  Text(
-                    app.citizenId,
-                    style: TextStyle(
-                      color: p.textDim,
-                      fontFamily: 'monospace',
-                      fontSize: 12,
+                  if (app.showDebugInfo)
+                    Text(
+                      app.citizenId,
+                      style: TextStyle(
+                        color: p.textDim,
+                        fontFamily: 'monospace',
+                        fontSize: 12,
+                      ),
                     ),
-                  ),
                 ],
               ),
             ),
@@ -377,7 +414,7 @@ class _IdentityCard extends StatelessWidget {
             ),
             const SizedBox(width: 8),
             if (famId != null)
-              _Badge(label: 'FAMILY $famId', color: p.secondary),
+              _Badge(label: 'RATION $famId', color: p.secondary),
           ],
         ),
       ],
@@ -426,33 +463,42 @@ class _DynamicQr extends StatelessWidget {
       children: [
         Container(
           padding: const EdgeInsets.all(8),
-          color: Colors.white,
-          child: QrImageView(
-            data: payload,
-            version: QrVersions.auto,
-            size: 180,
-            backgroundColor: Colors.white,
-          ),
+          child: HudQr(data: payload, size: 180),
         ),
         const SizedBox(height: 8),
-        HduReadout('TOKEN', app.currentToken().substring(0, 16)),
-        const SizedBox(height: 4),
+        if (app.showDebugInfo) ...[
+          HduReadout('TOKEN', app.currentToken().substring(0, 16)),
+          const SizedBox(height: 4),
+        ],
         HduReadout(
           'REFRESH',
           '${secondsLeft.toString().padLeft(2, '0')}s',
           color: secondsLeft <= 5 ? p.error : p.primary,
         ),
-        const SizedBox(height: 4),
-        Text(
-          payload,
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
-          style: TextStyle(
-            color: p.textDim,
-            fontFamily: 'monospace',
-            fontSize: 9,
+        if (!app.showDebugInfo) ...[
+          const SizedBox(height: 6),
+          Text(
+            'SHOW THIS CODE TO A RATION OFFICER',
+            style: TextStyle(
+              color: p.textDim,
+              fontFamily: 'monospace',
+              fontSize: 10,
+              letterSpacing: 1,
+            ),
           ),
-        ),
+        ],
+        const SizedBox(height: 4),
+        if (app.showDebugInfo)
+          Text(
+            payload,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: p.textDim,
+              fontFamily: 'monospace',
+              fontSize: 9,
+            ),
+          ),
       ],
     );
   }
@@ -467,7 +513,25 @@ class _LocationPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     final p = AppPalette.of(context);
     final mesh = app.mesh;
+    final debug = app.showDebugInfo as bool;
     if (mesh.gpsFix) {
+      if (!debug) {
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            HduReadout('POSITION', 'LOCKED: SATELLITE GPS'),
+            const SizedBox(height: 4),
+            Text(
+              'Your location is being shared with the response team.',
+              style: TextStyle(
+                color: p.textDim,
+                fontFamily: 'monospace',
+                fontSize: 10,
+              ),
+            ),
+          ],
+        );
+      }
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -479,6 +543,27 @@ class _LocationPanel extends StatelessWidget {
     }
     final est = mesh.approxLatitude != null;
     if (est) {
+      if (!debug) {
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            HduReadout(
+              'POSITION',
+              'APPROXIMATE: ${peopleCount(mesh.approxSourceCount)} NEARBY',
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'No GPS chip here, so your position is estimated from '
+              'people around you.',
+              style: TextStyle(
+                color: p.textDim,
+                fontFamily: 'monospace',
+                fontSize: 10,
+              ),
+            ),
+          ],
+        );
+      }
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -499,6 +584,23 @@ class _LocationPanel extends StatelessWidget {
               color: p.textDim,
               fontFamily: 'monospace',
               fontSize: 9,
+            ),
+          ),
+        ],
+      );
+    }
+    if (!debug) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          HduReadout('POSITION', 'FINDING YOUR LOCATION…'),
+          const SizedBox(height: 4),
+          Text(
+            'Position will be estimated from people nearby once they are heard.',
+            style: TextStyle(
+              color: p.textDim,
+              fontFamily: 'monospace',
+              fontSize: 10,
             ),
           ),
         ],
@@ -567,12 +669,14 @@ class _MeshStatus extends StatelessWidget {
           '${nodes.where((n) => n.hasSos).length} ACTIVE',
           color: nodes.where((n) => n.hasSos).isNotEmpty ? p.error : p.primary,
         ),
-        const SizedBox(height: 6),
-        HduReadout(
-          'RADIO',
-          '${app.mesh.adapter.name} :: ${app.mesh.adapter.status}',
-          color: p.textDim,
-        ),
+        if (app.showDebugInfo) ...[
+          const SizedBox(height: 6),
+          HduReadout(
+            'RADIO',
+            '${app.mesh.adapter.name} :: ${app.mesh.adapter.status}',
+            color: p.textDim,
+          ),
+        ],
       ],
     );
   }

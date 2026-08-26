@@ -56,6 +56,12 @@ dependencies:
   flutter_local_notifications: ^22.3.0
   flutter_compass: ^0.8.1
   shared_preferences: ^2.5.5
+  sensors_plus: ^7.1.0
+  audioplayers: ^6.0.0
+  google_mlkit_face_detection: ^0.15.1
+  flutter_litert: ^3.8.0
+  camera: ^0.12.0+2
+  image: ^4.9.2
 
 dev_dependencies:
   flutter_test:
@@ -80,8 +86,10 @@ flutter:
   uses-material-design: true
 
   assets:
-    - assets/officer_pubkey.pem
     - assets/icon/gridzero_square_256.png
+    - assets/sounds/alert.wav
+    - assets/sounds/ack.wav
+    - assets/face/mobilefacenet.tflite
 
   # To add assets to your application, add an assets section, like this:
   # assets:

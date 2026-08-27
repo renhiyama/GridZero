@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:gridzero/core/mesh_crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gridzero/core/app_state.dart';
 import 'package:gridzero/ui/sync_screen.dart';
@@ -12,6 +13,7 @@ import 'widget_test.dart' show makeState, app;
 /// runs only on an explicit tap; this test covers the resting view.
 void main() {
   setUp(() {
+    setNetworkKey(null);
     SharedPreferences.setMockInitialValues({});
     const channel = MethodChannel('plugins.flutter.io/path_provider');
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger

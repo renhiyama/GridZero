@@ -1,9 +1,11 @@
 import 'dart:convert';
+import 'package:gridzero/core/mesh_crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gridzero/core/ledger/officer_sign.dart';
 import 'package:gridzero/core/provision_packet.dart';
 
 void main() {
+  setUp(() => setNetworkKey(null));
   test('HQ-signed provision verifies and fake fails', () {
     final auth = generateOfficerKey();
     final authPubB64 = base64Encode(auth.$1);

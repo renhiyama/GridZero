@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:gridzero/core/mesh_crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:gridzero/core/app_state.dart';
 import 'package:gridzero/ui/hud_theme.dart';
@@ -16,6 +17,7 @@ import 'widget_test.dart' show makeState, app;
 /// test keeps QR popups rendering on both directory pages.
 void main() {
   setUp(() {
+    setNetworkKey(null);
     SharedPreferences.setMockInitialValues({});
     const channel = MethodChannel('plugins.flutter.io/path_provider');
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger

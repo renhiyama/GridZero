@@ -301,6 +301,7 @@ String encodeAccountProvision({
   String? officerId,
   String? authorityPub,
   String? certB64,
+  String? netKeyB64,
   String? Function(String canonical)? signer,
   int expiresInSeconds = kAccountLifetimeSeconds,
   int? now,
@@ -315,6 +316,7 @@ String encodeAccountProvision({
     if (officerId != null) 'oid': officerId,
     if (authorityPub != null) 'ak': authorityPub,
     if (certB64 != null) 'cert': certB64,
+    if (netKeyB64 != null) 'netKey': netKeyB64,
   };
   if (signer == null) {
     return encodeProvisionEnvelope(
@@ -343,7 +345,7 @@ String encodeAccountProvision({
 /// Parses an account provisioning payload. Returns null on any malformed,
 /// expired, or non-account payload. The `sig` is not verified here — the
 /// caller must call `verifyProvisionEnvelope` with the HQ authority pub.
-({ProvisionPurpose purpose, String username, String passwordHash, String? pinHash, String? aadhaar, String? familyId, String? officerId, String? authorityPub, String? certB64, String? sig})?
+({ProvisionPurpose purpose, String username, String passwordHash, String? pinHash, String? aadhaar, String? familyId, String? officerId, String? authorityPub, String? certB64, String? netKeyB64, String? sig})?
 decodeAccountProvision(String payload, {int? now}) {
   final parsed = parseProvisionEnvelope(payload, requireType: ProvisionType.account, now: now);
   final env = parsed.envelope;
@@ -358,6 +360,7 @@ decodeAccountProvision(String payload, {int? now}) {
   final officerId = env.data['oid'] as String?;
   final authorityPub = env.data['ak'] as String?;
   final cert = env.data['cert'] as String?;
+  final netKey = env.data['netKey'] as String?;
   if (pin != null && pin.length != 64) return null;
   if (hash.length != 64) return null;
   return (
@@ -370,6 +373,7 @@ decodeAccountProvision(String payload, {int? now}) {
     officerId: officerId,
     authorityPub: authorityPub,
     certB64: cert,
+    netKeyB64: netKey,
     sig: env.signature,
   );
 }

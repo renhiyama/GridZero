@@ -9,6 +9,7 @@ import 'dart:ui' show Color;
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
+import 'mesh_crypto.dart';
 import 'package:flutter/material.dart' show ThemeMode;
 import 'package:flutter/services.dart'
     show MethodChannel, PlatformException;
@@ -306,6 +307,7 @@ class AppState extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     showDebugInfo = prefs.getBool(_kShowDebugPref) ?? false;
     respondAlertVolume = prefs.getDouble(_kRespondVolumePref) ?? 0.5;
+    await _loadNetworkKeyIfAny();
     await _restoreSyncTimestamps();
     await _restoreChatHistory();
     await _restoreMyLandmarks();
@@ -534,6 +536,18 @@ class AppState extends ChangeNotifier {
     // for verifying officer-signed landmarks later.
     if (acc.authorityPub != null) {
       await _storeAuthorityPub(acc.authorityPub!);
+    }
+    // Store the per-ADMIN network key for full mesh encryption. This is what
+    // isolates A (PQR) from B (XYZ) into distinct encrypted meshes — only
+    // holders of the same HQ's network key can decrypt each other's frames.
+    if (acc.netKeyB64 != null) {
+      try {
+        final netKey = base64Decode(acc.netKeyB64!);
+        if (netKey.length == kNetworkKeyBytes) {
+          await prefsForVerify.setString(kNetworkKeyPref, acc.netKeyB64!);
+          setNetworkKey(Uint8List.fromList(netKey));
+        }
+      } catch (_) {}
     }
     final prefs = await SharedPreferences.getInstance();
     final accounts = _readAccounts(prefs);
@@ -802,12 +816,14 @@ class AppState extends ChangeNotifier {
       return 'ERR:enrolled account vanished unexpectedly';
     }
     await _ensureAuthorityKey();
+    await _ensureNetworkKey();
     final key = deriveOfficerKey(acc.hash);
     final pubB64 = base64Encode(key.$1);
     final certB64 = certifyOfficerKey(acc.officerId!, pubB64);
     await prefs.setString('cert_sig_${acc.officerId}', certB64);
     await prefs.setString('cert_sig_${acc.username}', certB64);
     final authorityPub = await authorityPubKey();
+    final netKeyB64 = prefs.getString(kNetworkKeyPref);
     return encodeAccountProvision(
       purpose: ProvisionPurpose.officer,
       username: acc.username,
@@ -818,6 +834,7 @@ class AppState extends ChangeNotifier {
       officerId: acc.officerId,
       authorityPub: authorityPub,
       certB64: certB64,
+      netKeyB64: netKeyB64,
       signer: (canonical) => base64Encode(signOfficerRecord(_authorityPrivateB64!, canonical)),
     );
   }
@@ -880,6 +897,7 @@ class AppState extends ChangeNotifier {
     final acc = _readAccounts(prefs)[name];
     if (acc == null) return null;
     await _ensureAuthorityKey();
+    await _ensureNetworkKey();
     final idForCert = acc.officerId ?? acc.username;
     final key = deriveOfficerKey(acc.hash);
     final pubB64 = base64Encode(key.$1);
@@ -887,6 +905,7 @@ class AppState extends ChangeNotifier {
     await prefs.setString('cert_sig_$idForCert', certB64);
     await prefs.setString('cert_sig_${acc.username}', certB64);
     final authorityPub = await authorityPubKey();
+    final netKeyB64 = prefs.getString(kNetworkKeyPref);
     return encodeAccountProvision(
       purpose: acc.role == Role.officer
           ? ProvisionPurpose.officer
@@ -899,6 +918,7 @@ class AppState extends ChangeNotifier {
       officerId: acc.officerId,
       authorityPub: authorityPub,
       certB64: certB64,
+      netKeyB64: netKeyB64,
       signer: (canonical) => base64Encode(signOfficerRecord(_authorityPrivateB64!, canonical)),
     );
   }
@@ -2013,18 +2033,24 @@ class AppState extends ChangeNotifier {
 
   static const String kAuthorityPubPref = 'authority_pub';
   static const String kAuthorityPrivPref = 'authority_priv';
+  static const String kNetworkKeyPref = 'network_key';
   String? _authorityPublicB64;
   List<int>? _authorityPrivateB64;
 
   /// HQ: generates once. Phones receive the public half via provisioning QR.
+  /// Also ensures a per-ADMIN network key for full mesh encryption.
   Future<void> _ensureAuthorityKey() async {
-    if (_authorityPublicB64 != null) return;
+    if (_authorityPublicB64 != null) {
+      await _ensureNetworkKey();
+      return;
+    }
     final prefs = await SharedPreferences.getInstance();
     final pub = prefs.getString(kAuthorityPubPref);
     final priv = prefs.getString(kAuthorityPrivPref);
     if (pub != null && priv != null && pub.isNotEmpty) {
       _authorityPublicB64 = pub;
       _authorityPrivateB64 = base64Decode(priv);
+      await _ensureNetworkKey();
       return;
     }
     final pair = generateOfficerKey();
@@ -2032,6 +2058,39 @@ class AppState extends ChangeNotifier {
     _authorityPrivateB64 = Uint8List.fromList(pair.$2);
     await prefs.setString(kAuthorityPubPref, _authorityPublicB64!);
     await prefs.setString(kAuthorityPrivPref, base64Encode(pair.$2));
+    await _ensureNetworkKey();
+  }
+
+  Future<void> _ensureNetworkKey() async {
+    final prefs = await SharedPreferences.getInstance();
+    var b64 = prefs.getString(kNetworkKeyPref);
+    if (b64 != null) {
+      try {
+        final key = base64Decode(b64);
+        if (key.length == kNetworkKeyBytes) {
+          setNetworkKey(key);
+          return;
+        }
+      } catch (_) {}
+    }
+    // Only HQ (has authority private) auto-generates a network key. A
+    // citizen/officer phone with no prior provision stays unencrypted
+    // (isolated) until it scans a HQ-signed QR that carries netKey.
+    if (_authorityPrivateB64 == null) return;
+    final rnd = Random.secure();
+    final key = Uint8List.fromList([for (var i = 0; i < kNetworkKeyBytes; i++) rnd.nextInt(256)]);
+    await prefs.setString(kNetworkKeyPref, base64Encode(key));
+    setNetworkKey(key);
+  }
+
+  Future<void> _loadNetworkKeyIfAny() async {
+    final prefs = await SharedPreferences.getInstance();
+    final b64 = prefs.getString(kNetworkKeyPref);
+    if (b64 == null) return;
+    try {
+      final key = base64Decode(b64);
+      if (key.length == kNetworkKeyBytes) setNetworkKey(key);
+    } catch (_) {}
   }
 
   /// Signs `GZCERT|<officerId>|<pubB64>` with the authority private key.

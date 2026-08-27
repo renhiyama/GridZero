@@ -4,6 +4,7 @@ import 'package:gridzero/core/app_state.dart';
 import 'package:gridzero/core/ledger/ledger_store.dart';
 import 'package:gridzero/core/mesh_packet.dart';
 import 'package:gridzero/core/provision_packet.dart';
+import 'package:gridzero/core/mesh_crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -25,7 +26,7 @@ String officerProvision(String username, {String? officerId}) =>
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  setUp(() => SharedPreferences.setMockInitialValues({}));
+  setUp(() { setNetworkKey(null); SharedPreferences.setMockInitialValues({}); });
 
   test('HQ provisioning activates officer role offline', () async {
     final app = makeState();

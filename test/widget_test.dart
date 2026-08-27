@@ -7,6 +7,7 @@ import 'package:gridzero/ui/mesh_map.dart';
 import 'package:gridzero/ui/shell.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:gridzero/core/mesh_crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -43,6 +44,7 @@ Future<void> teardown(WidgetTester tester, AppState state) async {
 
 void main() {
   setUp(() {
+    setNetworkKey(null);
     SharedPreferences.setMockInitialValues({});
     // Path provider has no plugin in tests. FlutterMap's tile cache needs a
     // cache dir; the ledger's sqlite backend needs a support dir: returning

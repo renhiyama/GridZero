@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:crypto/crypto.dart';
 import 'package:gridzero/core/app_state.dart';
 import 'package:gridzero/core/ledger/ledger_store.dart';
+import 'package:gridzero/core/mesh_crypto.dart';
 import 'package:gridzero/core/mesh_packet.dart';
 import 'package:gridzero/core/provision_packet.dart';
 import 'package:gridzero/core/totp.dart';
@@ -37,7 +38,10 @@ String _pinHash(String pin) =>
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  setUp(() => SharedPreferences.setMockInitialValues({}));
+  setUp(() {
+    setNetworkKey(null);
+    SharedPreferences.setMockInitialValues({});
+  });
 
   test('family card payload encodes and decodes through the v2 envelope', () {
     final payload = encodeFamilyCardProvision(

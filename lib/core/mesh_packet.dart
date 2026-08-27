@@ -34,6 +34,7 @@ import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 
 import 'crc8.dart';
+import 'mesh_crypto.dart';
 
 const int meshMagic = 0xA5;
 const int meshPacketLength = 22;
@@ -364,22 +365,40 @@ class MeshPacket {
     out[13] = ((initialTtl & 0x0f) << 4) | (hopCount & 0x0f);
     bd.setUint16(14, seq, Endian.big);
     out[16] = crc8(out.sublist(0, 16));
+    final key = getNetworkKey();
+    if (key != null) {
+      return encryptMeshFrame(out, key);
+    }
     return out;
   }
 
   factory MeshPacket.decode(Uint8List raw) {
-    if (raw.length != meshPacketLength) {
+    // Try decrypt first if we have a network key. Plaintext frames will fail
+    // the CRC after decrypt, so we check both MAGIC and CRC before accepting
+    // the decrypted version — otherwise a plaintext frame would be garbled by
+    // a spurious decrypt with the wrong key.
+    Uint8List frame = raw;
+    final key = getNetworkKey();
+    if (key != null && raw.length == meshPacketLength) {
+      try {
+        final maybe = decryptMeshFrame(Uint8List.fromList(raw), key);
+        if (maybe[0] == meshMagic && maybe[16] == crc8(maybe.sublist(0, 16))) {
+          frame = maybe;
+        }
+      } catch (_) {}
+    }
+    if (frame.length != meshPacketLength) {
       throw const FormatException('packet length must be 22 bytes');
     }
-    if (raw[0] != meshMagic) {
+    if (frame[0] != meshMagic) {
       throw const FormatException('bad magic');
     }
-    final expectedCrc = crc8(raw.sublist(0, 16));
-    if (raw[16] != expectedCrc) {
+    final expectedCrc = crc8(frame.sublist(0, 16));
+    if (frame[16] != expectedCrc) {
       throw const FormatException('crc mismatch');
     }
-    final bd = raw.buffer.asByteData();
-    final type = MeshPacketType.fromValue(raw[1]);
+    final bd = frame.buffer.asByteData();
+    final type = MeshPacketType.fromValue(frame[1]);
     final carriesCoords = switch (type) {
       MeshPacketType.sosBeacon ||
       MeshPacketType.relayStatus ||
@@ -393,9 +412,9 @@ class MeshPacket {
       longitude: 0,
       triage: TriageFlags(),
       seq: bd.getUint16(14, Endian.big),
-      initialTtl: (raw[13] >> 4) & 0x0f,
-      hopCount: raw[13] & 0x0f,
-      flags: carriesCoords ? raw[17] : 0,
+      initialTtl: (frame[13] >> 4) & 0x0f,
+      hopCount: frame[13] & 0x0f,
+      flags: carriesCoords ? frame[17] : 0,
       altitudeCm: null,
     );
     switch (type) {
@@ -405,7 +424,7 @@ class MeshPacket {
         bufBd.setInt32(0, bd.getInt32(4, Endian.big), Endian.big);
         bufBd.setInt32(4, bd.getInt32(8, Endian.big), Endian.big);
         bufBd.setInt32(8, bd.getInt32(18, Endian.big), Endian.big);
-        final len = raw[17].clamp(0, 12);
+        final len = frame[17].clamp(0, 12);
         return MeshPacket(
           type: type,
           senderId: base.senderId,
@@ -418,10 +437,10 @@ class MeshPacket {
           flags: 0,
           altitudeCm: null,
           identityUsername: String.fromCharCodes(buf.sublist(0, len)),
-          identityRole: raw[12],
+          identityRole: frame[12],
         );
       case MeshPacketType.ledgerRecord:
-        final code = raw[12];
+        final code = frame[12];
         return MeshPacket(
           type: type,
           senderId: base.senderId,
@@ -440,9 +459,9 @@ class MeshPacket {
             rationCode: code == 0x0f
                 ? 'Other'
                 : (code < kRationCodes.length ? kRationCodes[code] : 'Other'),
-            claimUnits: ((raw[17] >> 1) & 0x07) == 0
+            claimUnits: ((frame[17] >> 1) & 0x07) == 0
                 ? 1.0
-                : (((raw[17] >> 1) & 0x07) * 0.25).toDouble(),
+                : (((frame[17] >> 1) & 0x07) * 0.25).toDouble(),
           ),
         );
       case MeshPacketType.revocationAlert:
@@ -459,7 +478,7 @@ class MeshPacket {
           altitudeCm: null,
           revocation: RevocationAlert(
             citizenId: bitsToId('CIT-', bd.getInt32(4, Endian.big)),
-            reasonCode: raw[12],
+            reasonCode: frame[12],
             issuedAt: bd.getUint32(18, Endian.big),
           ),
         );
@@ -482,11 +501,11 @@ class MeshPacket {
           flags: 0,
           altitudeCm: null,
           chunk: MeshDataChunk(
-            index: raw[4],
-            total: raw[12],
+            index: frame[4],
+            total: frame[12],
             data: buf.sublist(
               0,
-              raw[17].clamp(1, MeshDataChunk.chunkBytes),
+              frame[17].clamp(1, MeshDataChunk.chunkBytes),
             ),
           ),
         );
@@ -512,7 +531,7 @@ class MeshPacket {
           senderId: base.senderId,
           latitude: bd.getInt32(4, Endian.big) / 10000000.0,
           longitude: bd.getInt32(8, Endian.big) / 10000000.0,
-          triage: TriageFlags.fromValue(raw[12]),
+          triage: TriageFlags.fromValue(frame[12]),
           seq: base.seq,
           initialTtl: base.initialTtl,
           hopCount: base.hopCount,

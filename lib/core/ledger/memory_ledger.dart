@@ -30,6 +30,7 @@ class MemoryLedgerStore implements LedgerStore {
     _officerKeys.clear();
     _familyCards.clear();
     _officers.clear();
+    _landmarks.clear();
     _faceEmbeddings.clear();
   }
 
@@ -243,6 +244,7 @@ class MemoryLedgerStore implements LedgerStore {
       ],
       'officers': [for (final o in _officers.values) o.toMap()],
       'family_cards': [for (final c in _familyCards.values) c.toMap()],
+      'landmarks': [for (final l in _landmarks.values) l.toMap()],
       'face_embeddings': embEntries,
     });
   }
@@ -284,6 +286,11 @@ class MemoryLedgerStore implements LedgerStore {
         if (raw is! Map) throw const FormatException('bad officer');
         final o = OfficerRecord.fromMap(raw.cast<String, Object?>());
         _officers[o.officerId] = o;
+      }
+      for (final raw in (decoded['landmarks'] as List?) ?? const []) {
+        if (raw is! Map) throw const FormatException('bad landmark');
+        final lm = LandmarkRecord.fromMap(raw.cast<String, Object?>());
+        _landmarks['${lm.officerId}/${lm.label}'] = lm;
       }
       for (final raw in (decoded['face_embeddings'] as List?) ?? const []) {
         if (raw is! Map) throw const FormatException('bad embedding');

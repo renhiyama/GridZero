@@ -224,6 +224,8 @@ class OfficerRecord {
 
 /// A verified officer-signed point of interest, persisted so restarts and
 /// rebroadcasts never duplicate or lose entries. Primary key: officer+label.
+/// `signedBlobB64` preserves the original officer-signed blob so any holder
+/// can re-advertise it verbatim for far-away new joiners to verify.
 class LandmarkRecord {
   LandmarkRecord({
     required this.officerId,
@@ -232,6 +234,7 @@ class LandmarkRecord {
     required this.latitude,
     required this.longitude,
     required this.expiresAt,
+    this.signedBlobB64,
   });
 
   final String officerId;
@@ -240,6 +243,7 @@ class LandmarkRecord {
   final double latitude;
   final double longitude;
   final int expiresAt; // unix seconds
+  final String? signedBlobB64;
 
   bool get isExpired =>
       DateTime.now().millisecondsSinceEpoch ~/ 1000 >= expiresAt;
@@ -251,6 +255,7 @@ class LandmarkRecord {
         'lat': latitude,
         'lon': longitude,
         'expires_at': expiresAt,
+        'signed_blob': signedBlobB64,
       };
 
   static LandmarkRecord fromMap(Map<String, Object?> m) => LandmarkRecord(
@@ -260,6 +265,7 @@ class LandmarkRecord {
         latitude: (m['lat'] as num).toDouble(),
         longitude: (m['lon'] as num).toDouble(),
         expiresAt: (m['expires_at'] as num).toInt(),
+        signedBlobB64: m['signed_blob'] as String?,
       );
 }
 

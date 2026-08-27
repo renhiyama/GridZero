@@ -163,6 +163,7 @@ class OfficialLandmark {
     required this.latitude,
     required this.longitude,
     required this.expiresAt,
+    this.signedBlobB64,
   });
 
   final String officerId;
@@ -171,6 +172,10 @@ class OfficialLandmark {
   final double latitude;
   final double longitude;
   final DateTime expiresAt;
+  /// Base64 of the original officer-signed blob (verbatim for re-advertise).
+  /// Stored so any holder can re-broadcast the *original* HQ-certified sig for
+  /// far-away late-joiners to verify, not a re-signed copy.
+  final String? signedBlobB64;
 
   bool get isExpired => DateTime.now().isAfter(expiresAt);
 }
@@ -319,6 +324,7 @@ class AppState extends ChangeNotifier {
           latitude: l.latitude,
           longitude: l.longitude,
           expiresAt: DateTime.fromMillisecondsSinceEpoch(l.expiresAt * 1000),
+          signedBlobB64: l.signedBlobB64,
         ));
       }
     } catch (_) {
@@ -2114,6 +2120,7 @@ class AppState extends ChangeNotifier {
         '$typeCode|$expiry|$label';
     if (!_verifySig(officerPub, canonical, signature)) return;
 
+    final blobB64 = base64Encode(rx.bytes);
     final record = LandmarkRecord(
       officerId: officerId,
       label: label,
@@ -2121,8 +2128,9 @@ class AppState extends ChangeNotifier {
       latitude: lat,
       longitude: lon,
       expiresAt: expiry,
+      signedBlobB64: blobB64,
     );
-    await ledger.upsertLandmark(record); // dedup: upsert by officer+label
+    await ledger.upsertLandmark(record);
 
     officialLandmarks.removeWhere(
       (l) => l.label == label && l.officerId == officerId,
@@ -2134,6 +2142,7 @@ class AppState extends ChangeNotifier {
       latitude: lat,
       longitude: lon,
       expiresAt: DateTime.fromMillisecondsSinceEpoch(expiry * 1000),
+      signedBlobB64: blobB64,
     ));
     notifyListeners();
 
@@ -2233,6 +2242,19 @@ class AppState extends ChangeNotifier {
       ...base64Decode(certB64), // HQ certificate binding pubkey to officerId
       ...signature,
     ]);
+    final blobB64 = base64Encode(blob);
+    // Persist the signed blob so any holder (including this originator after
+    // a restart) can re-advertise the *original* HQ-certified sig for far-away
+    // verifiers. Verbatim replay keeps the officer's sig intact.
+    await ledger.upsertLandmark(LandmarkRecord(
+      officerId: id,
+      label: clean,
+      typeCode: typeCode,
+      latitude: latFixed / 10000000.0,
+      longitude: lonFixed / 10000000.0,
+      expiresAt: expiry,
+      signedBlobB64: blobB64,
+    ));
     await mesh?.broadcastDataPayload(MeshPacketType.announce, blob);
     // Keep our own landmark: displayed immediately and re-broadcast after a
     // restart while it is still valid.
@@ -2246,6 +2268,7 @@ class AppState extends ChangeNotifier {
       latitude: latFixed / 10000000.0,
       longitude: lonFixed / 10000000.0,
       expiresAt: DateTime.fromMillisecondsSinceEpoch(expiry * 1000),
+      signedBlobB64: blobB64,
     );
     officialLandmarks.add(landmark);
     await _persistMyLandmarks();
@@ -2269,6 +2292,7 @@ class AppState extends ChangeNotifier {
           'lat': l.latitude,
           'lon': l.longitude,
           'expiresAt': l.expiresAt.millisecondsSinceEpoch,
+          'blob': l.signedBlobB64,
         },
     ]));
   }
@@ -2294,6 +2318,7 @@ class AppState extends ChangeNotifier {
           latitude: (e['lat'] as num).toDouble(),
           longitude: (e['lon'] as num).toDouble(),
           expiresAt: expiresAt,
+          signedBlobB64: e['blob'] as String?,
         ));
       }
     } catch (_) {
@@ -2572,18 +2597,22 @@ class AppState extends ChangeNotifier {
 
   Timer? _landmarkRetxTimer;
 
-  /// Rebroadcasts landmarks this device still knows about every minute so a
-  /// phone that opens later (new joiner, app restart) eventually hears them.
+  /// Every holder re-broadcasts every verified landmark it knows (verbatim
+  /// original officer sig) so a far-away late-joiner that never heard the
+  /// originator can still verify the original HQ-certified sig. The blob is
+  /// replayed as-is, not re-signed, so the trust chain stays officer→HQ.
   void _startLandmarkRetx() {
     _landmarkRetxTimer?.cancel();
     _landmarkRetxTimer = Timer.periodic(const Duration(minutes: 1), (_) {
       for (final l in List.of(officialLandmarks)) {
         if (l.isExpired) continue;
-        // Only re-broadcast entries we originated: citizens shouldn't spam
-        // other officers' landmarks forever.
-        if (l.officerId == officerId) {
-          _rebroadcastLandmark(l);
+        if (l.signedBlobB64 == null) {
+          // Old entry without stored blob (pre-migration) — only the originator
+          // can re-sign it, others skip until it expires.
+          if (l.officerId == officerId) _rebroadcastLandmark(l);
+          continue;
         }
+        _rebroadcastLandmark(l);
       }
     });
   }
@@ -2592,19 +2621,25 @@ class AppState extends ChangeNotifier {
     final m = mesh;
     if (m == null) return;
     try {
+      // Prefer the original HQ-certified blob verbatim so far-away verifiers
+      // see the officer's sig, not a relay's. This preserves the trust chain.
+      if (landmark.signedBlobB64 != null) {
+        final blob = base64Decode(landmark.signedBlobB64!);
+        await m.broadcastDataPayload(MeshPacketType.announce, Uint8List.fromList(blob));
+        return;
+      }
+      // Fallback for old landmarks without stored blob (pre-migration): only
+      // the originator can re-sign.
       final typeCode = kLandmarkTypes.indexOf(landmark.typeLabel);
       final expiry = landmark.expiresAt.millisecondsSinceEpoch ~/ 1000;
       final id = landmark.officerId;
       final key = await ledger.officerKey(id);
       if (key == null) return;
-
-      // Re-derive canonical exactly as postOfficialLandmark did.
       final canonical =
           'GZANN1|${landmark.latitude.toStringAsFixed(7)}|'
           '${landmark.longitude.toStringAsFixed(7)}|'
           '$typeCode|$expiry|${landmark.label}';
       final sig = signOfficerRecord(key.$2, canonical);
-      // Certificate: HQ's binding for this pubkey (stored alongside enlist).
       final prefs = await SharedPreferences.getInstance();
       final certB64 = prefs.getString('cert_sig_$id') ?? '';
       final labelBytes = utf8.encode(landmark.label);

@@ -110,6 +110,12 @@ CREATE TABLE IF NOT EXISTS face_embeddings (
 );
 ''';
 
+/// v7: landmark signed blob for verbatim re-advertise by any holder.
+/// Existing rows keep null and will be lazily filled on next receive.
+const String kLedgerSchemaV7 = '''
+ALTER TABLE landmarks ADD COLUMN signed_blob TEXT;
+''';
+
 class SqliteLedgerStore implements LedgerStore {
   SqliteLedgerStore(this._db, this._path);
 
@@ -120,23 +126,26 @@ class SqliteLedgerStore implements LedgerStore {
     final db = await factory.openDatabase(
       path,
       options: OpenDatabaseOptions(
-        version: 6,
+        version: 7,
         onCreate: (db, _) async {
           await db.execute(kLedgerSchema);
           await _applyV3(db);
           await _applyV4(db);
           await _applyV5(db);
           await _applyV6(db);
+          await _applyV7(db);
         },
         // v1 DBs predate sync_records; CREATE IF NOT EXISTS upgrades in place.
         // v2->v3 adds signatures + revocation tables; v3->v4 adds families;
-        // v4->v5 adds the officer directory; v5->v6 adds face embeddings.
+        // v4->v5 adds the officer directory; v5->v6 adds face embeddings;
+        // v6->v7 adds landmark signed_blob for verbatim re-advertise.
         onUpgrade: (db, oldVersion, _) async {
           await db.execute(kLedgerSchema);
           if (oldVersion < 3) await _applyV3(db);
           if (oldVersion < 4) await _applyV4(db);
           if (oldVersion < 5) await _applyV5(db);
           if (oldVersion < 6) await _applyV6(db);
+          if (oldVersion < 7) await _applyV7(db);
         },
       ),
     );
@@ -195,6 +204,19 @@ class SqliteLedgerStore implements LedgerStore {
         await db.execute(trimmed);
       } on Exception {
         // table already present: nothing to migrate.
+      }
+    }
+  }
+
+  static Future<void> _applyV7(Database db) async {
+    final statements = kLedgerSchemaV7.split(';');
+    for (final stmt in statements) {
+      final trimmed = stmt.trim();
+      if (trimmed.isEmpty) continue;
+      try {
+        await db.execute(trimmed);
+      } on Exception {
+        // column already present: nothing to migrate.
       }
     }
   }
@@ -536,6 +558,7 @@ class SqliteLedgerStore implements LedgerStore {
     final revs = await revocations();
     final offs = await officers();
     final fams = await familyCards();
+    final lms = await landmarks();
     final embRows = await _db.query('face_embeddings');
     return jsonEncode({
       'v': 1,
@@ -551,6 +574,7 @@ class SqliteLedgerStore implements LedgerStore {
       ],
       'officers': [for (final o in offs) o.toMap()],
       'family_cards': [for (final c in fams) c.toMap()],
+      'landmarks': [for (final l in lms) l.toMap()],
       'face_embeddings': [
         for (final row in embRows)
           {
@@ -627,6 +651,22 @@ class SqliteLedgerStore implements LedgerStore {
           await txn.insert(
             'officer_registry',
             m,
+            conflictAlgorithm: ConflictAlgorithm.replace,
+          );
+        }
+        for (final raw in ((decoded as Map<String, Object?>)['landmarks'] as List? ?? const [])) {
+          final m = Map<String, Object?>.from(raw as Map);
+          await txn.insert(
+            'landmarks',
+            {
+              'officer_id': m['officer_id'],
+              'label': m['label'],
+              'type_code': m['type_code'],
+              'lat': m['lat'],
+              'lon': m['lon'],
+              'expires_at': m['expires_at'],
+              'signed_blob': m['signed_blob'],
+            },
             conflictAlgorithm: ConflictAlgorithm.replace,
           );
         }

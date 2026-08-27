@@ -1,131 +1,87 @@
 # GridZero: BLE Mesh Stack
 
-Version: 1.0 · Status: Draft · Pure prose (wire-format reference)
-Companion to `SRS.md` §3.3. No source references by design: this is the standalone wire contract.
+Version: 1.1 · Status: Active · Pure prose (wire contract) — updated 2026-08-28
+Companion to `SRS.md` §3.3.
 
 ---
 
 ## 1. Why an *advertisement* mesh
 
-GridZero does not use BLE connections (GATT) between peers. Every message rides inside a **BLE advertising packet**: the same one-shot broadcast phones emit when discoverable. Consequences:
+GridZero rides **BLE advertising packets** (one-shot manufacturer-data broadcasts, not GATT connections):
+- **Connectionless:** hundreds of peers, no pairing.
+- **Lossy:** unacked; reliability via `TTL` flood + `3×` repeat + sticky dwell.
+- **Platform:** Android `flutter_blue_plus`/`ble_peripheral_plus` (patched), Linux `BlueZ` D-Bus, Windows `BluetoothLEAdvertisementPublisher` (patch `tool/patches/windows_ble_advertise`), all `0xFFFF`.
 
-- **Connectionless:** a phone can "talk" to hundreds of neighbors without pairing, handshakes, or per-peer state.
-- **Asymmetric roles are fine:** any device can be both advertiser and scanner simultaneously.
-- **Lossy by nature:** broadcasts are unacknowledged; reliability comes from repetition (heartbeats) and flooding (TTL), not delivery guarantees.
-- **Platform-friendly:** Android and Linux BlueZ both expose raw manufacturer-data advertising without root.
+## 2. Radio capacity
 
-## 2. Radio capacity: what fits on air
+Legacy adv `31B` → `1B len +1B type 0xFF +2B company 0xFFFF =4B` overhead → **27B** for GridZero, we use **22B**. Rich data (ledger, face, account blobs) travels via `GZ1|crc` QR pages or `GZSYNC1` Wi-Fi (`ap0` `192.168.51.1/24`).
 
-A legacy BLE advertisement carries **31 bytes** of payload after radio headers. An AD structure spends:
-
-| Overhead | Bytes |
-|---|---|
-| Structure length field | 1 |
-| Type tag (Manufacturer Specific Data, 0xFF) | 1 |
-| Company ID (0xFFFF, Bluetooth-reserved test ID) | 2 |
-| **Available for the frame** | **≤ 27** |
-
-GridZero uses **22 of those 27 bytes**. It deliberately targets *legacy* advertising (not the larger extended-advertising PDUs) because extended advertising support is patchy across Android chipsets and absent/awkward under BlueZ. One frame always fits one packet: no fragmentation at the radio layer, no scan-response dependence.
-
-**Design rule this forces:** every message must say something useful in ~22 bytes. Richer data (full ledger hashes, face embeddings, account blobs) never goes over the mesh; it travels via QR codes or the Wi-Fi bulk-sync link. The mesh carries *pointers and alerts*; QR and hotspot carry *payloads*.
-
-## 3. Frame format (22 bytes, big-endian)
+## 3. Frame format (22B, big-endian)
 
 | Byte(s) | Field | Notes |
 |---|---|---|
-| 0 | MAGIC `0xA5` | Rejects foreign advertisers instantly |
-| 1 | TYPE | See table below |
-| 2–3 | SENDER_ID (uint16) | Node id hash suffix |
-| 4–7 | LATITUDE (int32) | Fixed point ×10⁷ (~1 cm resolution): coordinate frames only |
-| 8–11 | LONGITUDE (int32) | Same encoding |
-| 12 | TRIAGE_FLAGS | bit7 Medical, bit6 Trapped, bit5 Water, bit4 Food, bits3–0 Severity 1–5 |
-| 13 | TTL_HOP | High nibble = initial TTL (5), low nibble = hops travelled |
-| 14–15 | SEQ_NUM (uint16) | Monotonic counter, wraps |
-| 16 | CRC8 | Polynomial 0x07, computed over bytes 0–15 |
-| 17 | FLAGS | bit0 = "SOS cleared" marker; overloaded per type below |
-| 18–21 | ALTITUDE (int32) | Centimetres; sentinel value means "unknown" |
+| 0 | MAGIC `0xA5` | |
+| 1 | TYPE | `0x01 SOS, 0x02 heartbeat, 0x03 ledger-req, 0x04 identity, 0x05 ledger-record, 0x06 revocation, 0x07 chat, 0x08 landmark, 0x09 respond` |
+| 2–3 | SENDER_ID uint16 | |
+| 4–7,8–11,12,17,18–21 | PAYLOAD | Overloaded per type (see below) |
+| 13 | TTL_HOP | high nibble TTL 5, low nibble hops |
+| 14–15 | SEQ uint16 | |
+| 16 | CRC8 poly 0x07 over 0–15 | |
+| 17 | FLAGS | SOS cleared bit; per-type length/marker |
+| 18–21 | ALTITUDE int32 cm | `0x80000000` = unknown |
 
-### Frame types & payload reuse
+**Payload reuse for `0x07`/`0x08` (11B chunk):** `byte4=index, byte12=total, byte17=len(1..11), bytes5-7,8-11,18-21=slice` → `MeshDataChunk.chunkBytes=11`, `total` up to 40 (max `440B` payload, chat caps `220B` wire).
 
-Bytes 4–21 double as payload for frames that carry no coordinates:
+IDs `CIT-XXXXXXXX` pack 4B hex; else hashed.
 
-| Type | Name | Bytes 4–21 carry |
+## 4. Data payloads — signed where it matters
+
+- **Chat `0x07`:** `wire = 0x00+utf8` or `0x01+7bit` (`chat_codec.dart` 8→7 pack → 249 English chars in 220B). Signed blob for anti-spam: `[wireLen2][wire][uLen1][username][pub65][cert64][sig64]` where `sig=sign(priv, GZCHAT|username|base64(wire))` and `cert=sign(authorityPriv, GZCERT|username|pubB64)`. Receiver verifies `GZCERT` against pinned `authorityPub` (`kAuthorityPubPref`) then `GZCHAT` before `decodeChatWire`. Unsigned legacy still shown as `UNVERIFIED` during rollout.
+- **Landmark `0x08`:** `[lat4 lon4 type1 expiry4 labelLen label idLen id pub65 cert64 sig64]` with `sig=sign(priv, GZANN1|lat7|lon7|type|expiry|label)` (7-decimal). Verifier drops unverified/fake officer pins; `officialLandmarks` only holds verified.
+- **Provision `GZ1` QR:** `v2` envelope `{v,t,exp,nonce,data,cert,ak,sig}` where `sig=sign(authorityPriv, GZPROV|v|t|exp|nonce|canonicalData)` and `data` includes `cert`. First QR pins `ak` as root; later QRs must have valid `sig` against that root or are `fake account blocked`.
+- **Ledger/SOS** (next): `GZSOS`/`GZLEDGER` same `GZCERT` pattern planned; currently `0x05`/`0x01` are plaintext + dedup only.
+
+## 5. Flooding
+
+1. Encode → advertise. 2. Scan → magic/CRC/type. 3. Dedup `sender<<16|seq` LRU 500. 4. Drop if `TTL<=1`. 5. Rebroadcast `hop+1` (chat `3×` with dedupKey reuse so missed peers catch 2nd copy, seen peers drop). `chat` single-chunk is `persistent:true` 12s so a 9s `NOMINAL` sleeper wakes into it.
+
+## 6. Radio governor
+
+| Tier | When | Scan |
 |---|---|---|
-| 0x01 | SOS beacon | Coordinates + triage flags + altitude |
-| 0x02 | Relay status / heartbeat | Coordinates ("I'm alive, here I am") |
-| 0x03 | Ledger sync request | Coordinates; asks peers for pending claims |
-| 0x04 | Identity announce | Username ASCII ≤12 chars (split across three slots), role code, name length in byte 17 |
-| 0x05 | Ledger record | Citizen-id 4B tag, officer-id 4B tag, claim timestamp epoch32, ration-code index (0–4 or 0xF "other"), claim units as quarter-bits in byte 17 |
-| 0x06 | Revocation alert | Citizen-id 4B tag + SHA-256 digest tag, reason (stolen/suspended/cleared), issue time |
-| 0x09 | Respond ack | Target node id uint16 ("I am coming to help node X") |
+| ALERT | SOS live (90s) | continuous |
+| BURST | new peer *or any* `chat`/`announce` (12s lease) | 3s/400ms |
+| NOMINAL | signed-in, quiet | 3s/9s |
+| STANDBY | anonymous | 3s/27s |
 
-ID packing: ids shaped like `CIT-XXXXXXXX` pack their hex suffix into 4 bytes; anything else is hashed to a stable 4-byte tag. Full ration-item names never travel: only an index into a shared five-item list (Rice, Water, Blanket, Medicine, Fuel).
+Jitter breaks phase-lock. Linux HQ `CONTINUOUS` (0ms). `chat` screen `boostScan` forces `BURST` 15s.
 
-## 4. Flooding protocol
+## 7. Airtime — one slot, 32-deep queue
 
-1. A device encodes a frame and starts advertising it.
-2. Every scanning neighbor receives it, checks magic → CRC → type.
-3. Duplicate check: key = sender id combined with sequence number, against an LRU cache of the last **500** keys. Seen before → drop silently.
-4. If hop count has reached initial TTL (**default 5**) → drop.
-5. Otherwise rebroadcast with hop count + 1. The frame ripples outward in rings, one ring per radio hop.
+Sticky persistent (heartbeat/SOS or single-chunk chat 12s) + rotate queue `400ms` fast drain (native) / `2s` (BlueZ) / `WinRT` publisher. `BlueZ` `InProgress` guard prevents `startDiscovery` spam. `Windows` `WinMeshAdapter` now full TX/RX via `BluetoothLEAdvertisementPublisher` patch.
 
-This is classical controlled-flood dissemination: zero routing state, maximal redundancy, bounded by TTL and dedup.
+Heartbeat every 10s: SOS wins, else `announce+identity` every 3rd tick `ledger-sync-req`. Single-chunk chat dwells 12s, multi-chunk 3× paced `500ms` + `800ms` gaps, depth wait `≤4` or `8s`.
 
-## 5. Radio governor (battery management)
+## 8. Peer lifecycle
 
-Scanning is expensive; advertising is nearly free. The governor picks a duty-cycle tier from context:
+Node `id→state` (lat/lon, severity, RSSI, hops, lastSeen, username). SOS lease 90s, sweep 15s drops >2min silent. Position fallback median of GPS peers, >3× median rejected. GPS movement-gated 25-sample variance, 10s refetch floor.
 
-| Tier | When active | Scan behaviour |
+## 9. Limitations
+
+| Limitation | Detail | Mitigation |
 |---|---|---|
-| ALERT | Own or peer SOS live (90 s continuous-scan lease) | Continuous scan |
-| BURST | New peer discovered (12 s lease) | Fast scan, short sleeps (≈400 ms) |
-| NOMINAL | Signed-in user, quiet camp | ≈3 s scan / 9 s sleep |
-| STANDBY | Anonymous device | ≈3 s scan / 27 s sleep |
+| 22B/frame | Caps per-frame | Bulk via QR/Wi-Fi, 11B chunking |
+| 16-bit ids | Collisions >few hundred | Camp scale |
+| Plaintext | `SOS`/`ledger` still unsigned | Next: `GZSOS`/`GZLEDGER` signed as `GZCHAT` |
+| Congestion | 3 channels, legacy interval floors | Governor + 12s sticky + 3× |
+| Windows adv | Needed patch | `tool/patches/windows_ble_advertise` |
 
-Random jitter breaks phase-lock (so devices don't fall into synchronized blind windows). The Linux HQ ignores duty hints: it scans continuously because it's mains-powered.
+## 10. Roadmap
 
-## 6. Airtime scheduling: one slot, many messages
-
-A phone advertises **one frame at a time**. A queue (capacity 32) rotates frames through the slot: during burst drain each frame gets ≈400 ms of airtime; one "sticky persistent" frame (current coordinates announce, or an active SOS) always returns to the rotation. Failed slot swaps are peek-then-commit so nothing is silently lost.
-
-Heartbeat cadence: every 10 s the device re-arms its slot: SOS wins if active, else announce + identity; every third tick it also requests ledger sync. Respond-acks repeat every 10 s while the responder's radar screen is open.
-
-## 7. Peer lifecycle
-
-- Node table tracks per neighbor: position, severity, RSSI, hops, last-seen, username, role.
-- **SOS lease:** a peer SOS stays "active" 90 s after last sighting; explicit clear markers (flags bit0), non-SOS announces, or lease expiry all end the alarm.
-- **Garbage collection:** a controller sweep every 15 s drops nodes silent > 2 minutes.
-- **Position fallback:** GPS-less devices estimate their own location as the median of GPS-bearing neighbors' positions, rejecting outliers beyond 3× median distance. GPS itself is movement-gated (accelerometer variance triggers a fix) to save power.
-
-## 8. Limitations & known risks
-
-| Limitation | Detail | Mitigation today |
-|---|---|---|
-| Tiny payload | 22 bytes/frame caps expressiveness | Bulk data via QR + Wi-Fi sync; mesh carries alerts/tags only |
-| Plaintext, unsigned | Any BLE listener can read SOS locations/usernames and can forge frames (including fake revocations) | Accepted for v1 air-gap threat model; crypto roadmap item |
-| 16-bit sender ids | Collisions likely beyond a few hundred concurrent nodes | Fine for camp scale (<~500); roadmap: wider ids |
-| Sequence wrap | uint16 counters wrap → stale-dedup edge cases | LRU eviction bounds damage |
-| Unacknowledged radio | Broadcasts can be missed | Flooding redundancy + heartbeats + store-and-forward claim push on rediscovery |
-| Congestion | Hundreds of advertisers share 3 BLE channels; legacy adv interval floors apply | Duty-cycle governor + slot rotation keep per-device airtime low |
-| Revocation trust | 0x06 frames carry only a 4-byte tag + digest tag, no signature | Physical verification still required at claim time |
-| BlueZ quirks | Stale advertisement handles exhaust the kernel's adv slots; handled by unregistering before re-register | HQ-only workaround |
-
-## 9. Roadmap candidates
-
-- Per-frame AEAD encryption + sender signatures once key provisioning exists (frames would shrink payload further; may need two-frame messages).
-- GATT connection mode for officer↔HQ bulk exchange without Wi-Fi.
-- Adaptive TX power / RSSI-based backoff for very dense camps.
+Per-frame `AEAD` + `GZSOS`/`GZLEDGER` signatures, GATT bulk, adaptive TX power.
 
 ---
 
 ## Layman Terms
 
-Phones in the camp gossip using Bluetooth's "shout into the void" mode: the same blip your phone makes when it's discoverable: instead of formally connecting like headphones do. That trick means one phone can reach everyone nearby at once, no pairing pop-ups, no internet.
-
-Each shout is tiny: about the size of a tweet's first sentence. So the system only shouts the essentials: "SOS! Badly hurt, needs medicine, here are my map coordinates" or "this ration card was reported stolen." Anything bigger (photos, full records) moves by barcode or by the Wi-Fi bubble around the HQ laptop.
-
-When someone shouts, every phone that hears it repeats it once, like people passing a message down a line of hands. A hop-counter stamped on the message dies after five passes so it doesn't echo forever, and a shortlist memory stops the same message being repeated twice.
-
-To save battery, phones don't listen all the time. They listen hard during emergencies, briskly just after meeting a new neighbor, and lazily nap otherwise. Only one message gets shouted at a time, taking turns from a small queue: and an active SOS always jumps the line.
-
-Honest downsides: the shouts aren't secret (anyone with a laptop could eavesdrop) and aren't signed (a prankster could shout a fake). For version 1 inside a closed relief camp that's accepted and written down; locking the messages is the next upgrade.
+Phones gossip by shouting Bluetooth blips. Each blip is tiny; rich stuff moves by barcode/Wi-Fi. A hop counter and fingerprint stop endless echo. Battery: listen hard in emergency, nap otherwise, with one long-held shout for short chats so sleeping phones wake into it. Now every chat and map pin carries HQ's stamp and the author's signature — fakes are thrown away before they reach the map.

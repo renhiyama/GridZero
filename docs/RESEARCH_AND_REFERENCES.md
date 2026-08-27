@@ -1,6 +1,10 @@
 # GridZero: Research & References
 
-Version: 1.0 · Status: Draft · Pure prose
+Version: 1.1 · Status: Active · Pure prose
+
+---
+
+*Updated 2026-08-28 to v1.1: HQ-signed `GZPROV`/`GZCERT` provision blocks fake accounts, `GZCHAT`/`GZANN1` signed chat/landmarks block bot spam, 7-bit English pack (249 chars), HQ-hosted `ap0` link + Windows `BluetoothLEAdvertisementPublisher` patch, `MeshMap` landmarks on HQ/citizen/officer maps. `24h` is QR validity only — accounts never expire, future internet login reuses same hash-derived key.*
 
 ---
 

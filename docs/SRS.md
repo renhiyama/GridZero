@@ -1,129 +1,134 @@
 # GridZero: Software Requirements Specification
 
-Version: 1.0 · Status: Draft · Conformance: IEEE-830-inspired, condensed
-Companion to `PRD.md`. Wire-format details in `BLE_MESH_STACK.md`.
+Version: 1.1 · Status: Active · Conformance: IEEE-830-inspired, condensed
+Companion to `PRD.md`. Wire-format in `BLE_MESH_STACK.md`.
 
 ---
 
 ## 1. Scope
 
-GridZero is a Flutter application (Android client, Linux Command HQ) providing offline disaster-relief coordination: BLE advertisement mesh messaging, SOS triage, ration distribution against a tamper-evident ledger, and HQ provisioning/sync.
+GridZero is a Flutter application (Android client, Linux HQ primary + Windows HQ via WinRT patch) providing offline disaster-relief coordination: BLE advertisement mesh messaging (now HQ-signed), SOS triage, ration distribution against a tamper-evident ledger, and HQ provisioning/sync. Future internet login can reuse the same hash-derived keys without a new QR.
 
 ## 2. System Context
 
 ```
 [Citizen phone] ~BLE~ [Officer phone] ~BLE~ [Citizen phone]
         \                |                /
-         ~BLE flood mesh (TTL 5)~
+         ~BLE flood mesh (TTL 5, signed chat/landmark)~
                          |
-              [HQ Linux laptop] --Wi-Fi hotspot link (TCP :7941)-- any phone
+              [HQ Linux/Windows laptop] --Wi-Fi link (TCP :7941, GZSYNC1)-- any phone
+              HQ hosts GZ-<USER> WPA2 ap0 (192.168.51.1/24) or joins phone hotspot on Windows
 ```
 
-Platforms: Android 12+ (primary), Linux x64 desktop (HQ). iOS directory present but unsupported in v1.
+Platforms: Android 12+ (primary), Linux x64 desktop (HQ), Windows x64 (HQ via `tool/patches/windows_ble_advertise`), iOS present but unsupported in v1.
 
 ## 3. Functional Requirements
 
 ### 3.1 Identity & Accounts
 - FR-3.1.1 Roles: `citizen`, `officer`, `admin` (`lib/core/app_state.dart:39`).
-- FR-3.1.2 Accounts stored per-device in SharedPreferences JSON; no cross-device login.
-- FR-3.1.3 Admin login is passwordless by design; admin-terminal flag persists across app wipe (`app_state.dart:247-269`).
-- FR-3.1.4 Officers are never created fresh: only promoted from existing users (`promoteToOfficer`); demotion preserves ledger history.
+- FR-3.1.2 Accounts per-device `SharedPreferences` JSON; no cross-device login. Hash is `sha256(password)` (64 hex).
+- FR-3.1.3 Admin passwordless with `adminTerminal` flag persisting across wipe.
+- FR-3.1.4 Officers only via promotion from existing user; demotion preserves ledger.
 
-### 3.2 Provisioning
-- FR-3.2.1 Paged QR codec `GZ1|i/n|crc32|slice`, order-independent reassembly, full-payload CRC32 (`lib/core/provision_packet.dart`).
-- FR-3.2.2 Typed v2 envelope `{v:2,t:"account|family|hotspot",exp,nonce,data}`; expiry: account 24 h, family card 30 d, hotspot 10 min; nonce must be unique.
-- FR-3.2.3 Account envelope carries password hash (never plaintext), optional pinHash/aadhaar/family/officerId.
-- FR-3.2.4 HQ persists issued accounts at generation time (`saveIssuedAccount`).
+### 3.2 Provisioning — HQ-Signed Trust
+- FR-3.2.1 Paged QR `GZ1|i/n|crc32|slice`, order-independent, full CRC32 (`lib/core/provision_packet.dart`).
+- FR-3.2.2 Typed v2 envelope `{v:2,t,exp,nonce,data,sig?}` where `sig = sign(authorityPriv, GZPROV|v|t|exp|nonce|canonicalData)` and `canonicalData` is sorted-key JSON of `data`. `exp`: account 24h, family 30d, hotspot 10m. `sig` covers `data` including `cert`.
+- FR-3.2.3 Account data carries `p,u,h,pin,a,f,oid,ak,cert` where `cert = sign(authorityPriv, GZCERT|id|pubB64)` and `pub` is `deriveSigningKey(hash)` (`lib/core/ledger/officer_sign.dart:105`). `ak` is authority pub. First QR pins `ak` as trust root; subsequent QRs must have valid `sig` against that root or are rejected as fake.
+- FR-3.2.4 `24h` is QR validity only — once `provisionAccount` saves the hash, the account never expires; local `login` is offline forever. Future internet login can reuse same hash-derived key.
+- FR-3.2.5 HQ persists `cert_sig_$id` for every issued account at `accountProvisionPayload` time.
 
 ### 3.3 Mesh Networking
-- FR-3.3.1 Fixed 22-byte frame, magic `0xA5`, types: SOS `0x01`, heartbeat `0x02`, ledger-sync-request `0x03`, identity `0x04`, ledger-record `0x05`, revocation `0x06`, respond-ack `0x09` (`lib/core/mesh_packet.dart`).
-- FR-3.3.2 Flooding relay with TTL/hop nibble, initial TTL 5; hop+1 on rebroadcast.
-- FR-3.3.3 Dedup key `(senderId<<16)|seq`; LRU of last 500 keys (`lib/core/nonce_dedup.dart`).
-- FR-3.3.4 CRC8 (poly 0x07) over bytes 0–15 validated before processing.
-- FR-3.3.5 Duty-cycle governor tiers ALERT/BURST/NOMINAL/STANDBY (`native_mesh.dart:56-68`).
-- FR-3.3.6 Single-advertisement slot queue (max 32 frames) with sticky persistent frame; 400 ms fast drain (`native_mesh.dart:330-463`).
+- FR-3.3.1 Fixed 22-byte frame, magic `0xA5`, types: `0x01 SOS`, `0x02 heartbeat`, `0x03 ledger-sync-req`, `0x04 identity`, `0x05 ledger-record`, `0x06 revocation`, `0x07 chat` (signed), `0x08 landmark` (HQ-certified), `0x09 respond-ack` (`lib/core/mesh_packet.dart`).
+- FR-3.3.2 Flooding TTL 5, hop+1.
+- FR-3.3.3 Dedup `(senderId<<16)|seq` LRU 500 (`lib/core/nonce_dedup.dart`).
+- FR-3.3.4 CRC8 poly 0x07 over 0–15.
+- FR-3.3.5 Governor tiers `ALERT` (SOS) continuous, `BURST` 3s/400ms 12s lease on new peer *or* any `chat`/`announce`, `NOMINAL` 3s/9s, `STANDBY` 3s/27s (`lib/core/mesh/native_mesh.dart:56`).
+- FR-3.3.6 Single slot queue max 32, sticky persistent; `chat` single-chunk is sticky 12s + 2 quick re-airs so a 9s sleeper catches it; multi-chunk 3× repeat with 500ms pacing and dedupKey reuse (`lib/core/mesh/mesh_controller.dart:437`).
+- FR-3.3.7 Windows HQ `BluetoothLEAdvertisementPublisher` patch (`tool/patches/windows_ble_advertise*`) gives full TX/RX on `WinMeshAdapter`.
 
 ### 3.4 Location
-- FR-3.4.1 GPS acquisition movement-gated by accelerometer variance (25-sample window), rising-edge trigger; 2-min stale watchdog (`movement_gate.dart`, `app_state.dart:1008-1053`).
-- FR-3.4.2 No-GPS devices estimate position via peer consensus: median filter of GPS-bearing peers, outliers >3× median distance rejected (`mesh_controller.dart:89-113`).
+- FR-3.4.1 Movement-gated GPS (25-sample variance, rising edge, 10s refetch floor, 2-min stale watchdog).
+- FR-3.4.2 No-GPS consensus median of peers, outlier >3× median rejected.
 
 ### 3.5 SOS & Response
-- FR-3.5.1 SOS carries severity 1–5 + TriageFlags bitfield (MED/TRAP/WATER/FOOD).
-- FR-3.5.2 Active SOS wins the advertisement slot every heartbeat (10 s).
-- FR-3.5.3 Peer SOS lease 90 s; controller sweep drops peers silent >2 min.
-- FR-3.5.4 Respond-ack frame re-sent every 10 s while responder radar is open; target's phone rings siren via forced speakerphone (`radar_screen.dart`, AudioAlert MethodChannel).
-- FR-3.5.5 Persistent banner + OS notification deep-link to radar/HQ map focus.
+- FR-3.5.1 SOS `severity 1–5` + `TriageFlags` bitfield.
+- FR-3.5.2 SOS wins persistent slot every 10s heartbeat.
+- FR-3.5.3 Peer SOS lease 90s; sweep drops silent >2min.
+- FR-3.5.4 `respond-ack` 3× flood → target rings via `AudioAlert` speakerphone.
+- FR-3.5.5 Banner + notification deep-link.
 
 ### 3.6 Ration Claims & Ledger
-- FR-3.6.1 Citizen QR payload JSON `{v,c,w,tok,n,ph,f}`; token = first 16 hex chars of HMAC-SHA256(K, window‖id), K = SHA256("gridzero:citizen:"+id), window 30 s ±1 tolerance (`lib/core/totp.dart`, `app_state.dart:citizenQrPayload`).
-- FR-3.6.2 Officer verification chain: decode → derive key → verify TOTP → fallback knowledge-PIN hash compare + visual ID dialog → revocation check → family gates → append (`app_state.dart:1200-1256`).
-- FR-3.6.3 Ledger record: recordId = SHA256(citizen|ration|ts)[0:24]; hash = SHA256(recordData‖prevHash); genesis anchor SHA256("GridZero-Genesis-Anchored") (`ledger_store.dart`).
-- FR-3.6.4 Append requires prevHash == local tail; unique index rejects same (citizen, ration-code, day) (`sqlite_ledger.dart`).
-- FR-3.6.5 Officer signature ECDSA P-256 deterministic RFC-6979, 64-byte r‖s + 65-byte pubkey, stored locally only (`officer_sign.dart`).
-- FR-3.6.6 Revocations (STOLEN/SUSPEND/CLEAR) persisted + diffused as type `0x06`; revoked cards refuse claims.
-- FR-3.6.7 Mesh merge into side-table `sync_records`; original hashes preserved verbatim; local chain never rewritten; cross-officer double-claims rejected at merge (`mergeRecord`).
+- FR-3.6.1 Citizen QR `{v,c,w,tok,n,ph,f}`; `tok` = HMAC-SHA256 16 hex, `window 30s ±1`.
+- FR-3.6.2 Officer verify: TOTP → PIN-hash fallback + face → revocation → family cap → append.
+- FR-3.6.3 Ledger `recordId = sha256(citizen|ration|ts)[0:24]`; `hash = sha256(prevHash|record)`; genesis `GridZero-Genesis-Anchored`.
+- FR-3.6.4 Append requires `prevHash==tail`; unique `(citizen, ration, day)`.
+- FR-3.6.5 ECDSA P-256 deterministic, 64B `r||s` + 65B pub, local only.
+- FR-3.6.6 Revocations `0x06` mesh-diffused.
+- FR-3.6.7 Merge into `sync_records`, preserve hashes, reject cross-officer double-claim.
 
 ### 3.7 Face Enrollment
-- FR-3.7.1 MobileFaceNet tflite inference; ML Kit detect → eye-centered align to 112² → L2-normalized embedding stored as blob keyed by citizen id (`lib/core/face_enroll.dart`).
-- FR-3.7.2 Offered once post-provisioning; re-enrollable in Settings; synced to HQ only during explicit DB exchange.
+- FR-3.7.1 MobileFaceNet 112², MLKit detect → eye-center → L2 blob per citizen.
+- FR-3.7.2 Offered once post-provision; re-enrollable; synced only via Wi-Fi exchange.
 
-### 3.8 Bulk Sync
-- FR-3.8.1 Raw TCP port 7941, framing `GZSYNC1|sha256hex|length\n` + bytes; sha256 verified both directions; single connection exchanges both ways (`lib/core/db_sync.dart`).
-- FR-3.8.2 HQ hosts virtual AP (`ap0` + hostapd/dnsmasq, subnet 192.168.51.x) via nmcli; phone joins via platform Wi-Fi suggestion channel; credentials purged after exchange (`linux_network.dart`, MainActivity.kt channel `gridzero/link`).
-- FR-3.8.3 Snapshot = records + revocations + officer registry + family cards + face embeddings; import merges without rewriting local chain (`exportSnapshot/importSnapshot`).
+### 3.8 Bulk Sync — HQ-Hosted Link
+- FR-3.8.1 `GZSYNC1|sha256|len` TCP `:7941`, two-way in one connection; sha256 verified both ways.
+- FR-3.8.2 HQ hosts `ap0` (`hostapd`/`dnsmasq` `192.168.51.1/24`, `nft` masquerade) or on Windows joins phone hotspot via `netsh`; phone `WifiNetworkSuggestion` + `gridzero/link` channel, purged after.
+- FR-3.8.3 Snapshot `records+revocations+officers+family+face`; import merges without rewrite.
 
-### 3.9 UI Shell
-- FR-3.9.1 Role-dependent navigation: Admin tabs HQ/Users/Officers/Sync/Register/Settings; Citizen(+Officer) tabs Citizen/Map/[Officer]/Settings (`shell.dart`).
-- FR-3.9.2 Radar: compass bearing + GPS distance, RSSI-range fallback with explicit "no GPS" honesty hint.
-- FR-3.9.3 Maps: OSM tiles with offline grid fallback; HQ adds Gaussian triage heatmap (`dashboard_screen.dart:_HeatmapPainter`).
-- FR-3.9.4 DANGER ZONE wipes ledger + prefs + regenerates device id.
+### 3.9 Chat — Signed & English-Efficient
+- FR-3.9.1 Wire limit 220B = 220 ASCII (1B UTF-8); Hindi/emoji 2–4B → ~70/55 chars. Pure ASCII 221–249 auto-packs 7-bit `8→7` via `lib/core/chat_codec.dart` (`GZCHAT`).
+- FR-3.9.2 Every chat is `wireLen|wire|uLen|username|pub65|cert64|sig64` where `sig=sign(priv, GZCHAT|username|base64(wire))` and `cert=GZCERT|id|pub`. Receiver verifies `GZCERT` against `authorityPub`, then `GZCHAT`; unverified is dropped when HQ has been pinned. Own message added immediately; cooldown 15s.
+
+### 3.10 Landmarks — Verified on Every Map
+- FR-3.10.1 Officer long-press map → `postOfficialLandmark` builds `GZANN1|lat|lon|type|expiry|label` (7-decimal) signed with `deriveSigningKey(hash)` and `cert = GZCERT|officerId|pub`; blob `[lat4 lon4 type1 expiry4 labelLen label idLen id pub65 cert64 sig64]` chunked via `0x08`. Verifier `lib/core/app_state.dart:1941` checks `GZCERT` then `GZANN1` before `ledger.upsertLandmark` and `officialLandmarks`.
+- FR-3.10.2 `MeshMap` on HQ `dashboard_screen.dart:285`, citizen `map_screen.dart:35`, officer `officer_screen.dart:640` all render `officialLandmarks.where(!expired)` as shield pins; citizen sees same verified pins, hacked apps cannot forge.
+
+### 3.11 UI Shell
+- FR-3.11.1 Admin: HQ/Users/Officers/Sync/Register/Settings; Citizen(+Officer): Citizen/Map/[Officer]/Settings (`shell.dart`).
 
 ## 4. Non-Functional Requirements
 
 | ID | Requirement |
 |---|---|
-| NFR-1 Performance | SOS visible to direct peers < 3 s; 3-hop < 15 s. Heartbeat period 10 s. |
-| NFR-2 Battery | Duty-cycle governor caps scan windows per tier; NOMINAL ≈ 3 s scan / 9 s sleep. |
-| NFR-3 Reliability | CRC8 wire check; dedup LRU-500; store-and-forward pending-record push on peer discovery. |
-| NFR-4 Integrity | Hash-chained ledger; daily duplicate guard; sha256 sync framing; CRC32 provisioning. |
-| NFR-5 Auditability | ECDSA signatures with `[SIG✓/✗/·]` badges in HQ audit log. |
-| NFR-6 Portability | Graceful degradation on Linux (no GPS/camera-capture/notifications) and feature-absent phones. |
-| NFR-7 Privacy | Biometric embeddings local-only until explicit sync; directories show roles/ids, never hashes. |
+| NFR-1 Performance | SOS 3-hop <15s; heartbeat 10s; chat single-chunk <12s (sticky) |
+| NFR-2 Battery | Governor 25% NOMINAL, 10% STANDBY; Linux CONTINUOUS |
+| NFR-3 Reliability | CRC8, LRU-500, 3× chat repeat, 12s sticky, BlueZ InProgress guard |
+| NFR-4 Integrity | Hash chain, duplicate guard, `GZPROV`/`GZCERT`/`GZCHAT`/`GZANN1` ECDSA, CRC32 provisioning, sha256 sync |
+| NFR-5 Auditability | `[SIG✓]` badges; HQ directory shows `GZCERT` status |
+| NFR-6 Portability | Linux+Windows HQ, Android phones; graceful degrade (no GPS/camera) |
+| NFR-7 Privacy | Face local until explicit sync; directories show roles, never hashes |
 
-## 5. Security Model (current state)
+## 5. Security Model (v1.1)
 
-- Implemented: hash chain, RFC-6979 ECDSA claim signing, TOTP rotation, PIN-hash fallback, nonce dedup, CRC checks, provision envelope expiry/nonce, sha256 sync integrity.
-- Known gaps (accepted for v1 air-gapped threat model): mesh frames plaintext and unauthenticated (any peer can forge SOS/claim/revocation frames); DB sync has no TLS or peer auth: hash is integrity only; TOTP key derivable from public citizen id, so PIN fallback is the real check; officer private keys stored plaintext in sqlite; signature scope excludes claim units/familyId; single-linear chains diverge across devices with no global ordering; ADMIN is passwordless by design (physical-possession trust).
+- Implemented: hash chain, RFC6979 ECDSA, TOTP/PIN, LRU dedup, CRC8/32, sha256 sync, **HQ-signed provision (`GZPROV` + `GZCERT`) blocks fake accounts, signed `GZCHAT` blocks bot spam, `GZANN1` landmark chain blocks fake pins** — all verified against pinned `authorityPub` (`kAuthorityPubPref`).
+- Remaining gaps: ledger `CompactRecord` and `SOS` beacons are still plaintext + unsigned (next: `GZSOS`/`GZLEDGER` signed blobs via same `GZCERT` pattern); DB sync has hash integrity but no TLS (air-gapped Wi-Fi anyway); ADMIN passwordless is physical-possession trust; officer priv stored plaintext in Memory/SQlite via `deriveSigningKey` (deterministic from hash, not random).
 
-## 6. Data Dictionary (essentials)
+## 6. Data Dictionary
 
 | Entity | Fields |
 |---|---|
-| Account | username, role, passwordHash, pinHash?, aadhaar?, familyId?, citizenId? |
-| LedgerRecord | recordId(24 hex), citizenId, rationCode, claimedAt, officerId, prevHash, currentHash, sig?, pubkey?, units |
-| Revocation | citizenIdTag(4B)+digestTag, action(STOLEN/SUSPEND/CLEAR), origin, ts |
+| Account | username, role, hash(64 hex), pinHash?, aadhaar?, familyId?, officerId?, certB64 (pinned) |
+| ProvisionEnvelope | v, t, exp, nonce, data{...cert,ak}, sig? (GZPROV) |
+| LedgerRecord | recordId, citizenId, rationCode, claimedAt, officerId, prevHash, currentHash, sig?, pub? |
+| ChatWire | flag 0x00+utf8 or 0x01+7bit packed, max 220B wire (251 packed English) |
+| SignedChatBlob | wireLen2, wire, uLen, username, pub65, cert64, sig64 (GZCHAT) |
+| Revocation | citizenTag, digestTag, action, origin, ts |
 | MeshNode | id(u16), lat/lon, severity, rssi, hops, lastSeen, username, role |
-| FaceEmbedding | citizenId → float32 vector blob (local-only until sync) |
+| OfficialLandmark | label, typeCode, lat/lon, expiry, officerId, sig (GZANN1) |
 
 ## 7. Acceptance Criteria
 
-- AC-1: 3 phones relay an SOS 2 hops away within 15 s with Bluetooth-only radios.
-- AC-2: Same citizen + same ration code scanned twice same day by two different officers → second claim rejected.
-- AC-3: Tampering any byte of a synced ledger record fails merge or breaks chain linkage.
-- AC-4: Screenshot of citizen QR used after 90 s fails TOTP verification.
-- AC-5: Full HQ↔phone exchange completes both directions in one connection; corrupted frame aborts transfer.
-- AC-6: Wiping app data on HQ machine restores ADMIN role on next boot.
+- AC-1: 3 phones relay SOS 2 hops <15s.
+- AC-2: Same citizen+ration double-claim same day by two officers → second rejected.
+- AC-3: Tampering any ledger byte fails merge or breaks chain.
+- AC-4: Screenshot QR after 90s fails TOTP.
+- AC-5: HQ↔phone two-way exchange in one TCP; corrupt frame aborts.
+- AC-6: Wiping HQ wipes ADMIN, repins HQ root on next QR.
+- AC-7: QR without HQ `sig` after root pinned is rejected as `fake account blocked`.
+- AC-8: Unsigned `GZCHAT` from unknown pub after root pinned is dropped; signed chat from real officer/citizen appears on all three maps.
 
 ---
 
 ## Layman Terms
 
-This is the builder's blueprint. It says exactly what each part must do:
-
-- **Who uses it:** three kinds of people: ordinary camp residents (citizens), aid workers with scanners (officers), and one control-desk laptop (admin).
-- **Getting in:** nobody signs themselves up; the control desk prints scannable codes that hand out identities, like issuing wristbands at a festival gate.
-- **The walkie-talkie network:** phones shout short messages over Bluetooth; each message has a "jump counter" so it dies after 5 hops instead of bouncing forever, plus a fingerprint check so garbled messages get dropped and repeats get ignored.
-- **Crying for help:** SOS messages say how bad things are and what's needed; nearby responders' answers make the person's phone ring loudly.
-- **Food queue:** the changing barcode stops photo-copying; the receipt book can't be edited quietly; the same person can't draw the same item twice in one day even from two different workers.
-- **Moving data to base:** one tap makes the laptop open its own little Wi-Fi bubble; the phone steps in, both sides swap complete copies, checksums prove nothing got mangled, and the Wi-Fi password is thrown away afterwards.
-- **Honesty section:** the spec openly lists what's *not* protected yet (messages aren't encrypted, so a tech-savvy eavesdropper could read them): like a shop that locks the till but leaves the window open, documented so everyone knows.
+Three people: residents, aid workers, head office. No one self-registers — HQ prints a signed scannable code that is the only way to get an account (like a signed wristband). Phones shout over Bluetooth; each shout has a hop counter and fingerprint so garbled or duplicate shouts die quickly. Help cries say how bad and what is needed; responders' answer makes the phone ring. Food barcodes tick every 30s; the receipt book is glued page-to-page and each page is signed. Now every chat and every map pin is also signed with the same wristband key and double-checked against HQ's master stamp — fakes from a hacked app are thrown away, and only real officers' pins show on everyone's map.

@@ -1,3 +1,4 @@
+// ignore_for_file: use_null_aware_elements
 /// Paged QR provisioning (FR-2.3 / HQ enrolment handoff).
 ///
 /// A single QR can hold ~100 bytes readable on a phone; account and family
@@ -19,6 +20,7 @@
 /// issuance unique.
 library;
 
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:math';
 
@@ -163,39 +165,62 @@ class ProvisionEnvelope {
     required this.expiresAt,
     required this.nonce,
     required this.data,
+    this.signature,
   });
 
   final ProvisionType type;
   final int expiresAt;
   final String nonce;
   final Map<String, Object?> data;
+  final String? signature;
 }
 
 /// Result of parsing an envelope: [envelope] set when [error] is null.
 typedef EnvelopeParse = ({ProvisionEnvelope? envelope, String? error});
 
+String _canonicalData(Map<String, Object?> data) {
+  // Deterministic JSON with sorted keys for signing.
+  return jsonEncode(SplayTreeMap<String, Object?>.from(data));
+}
+
+/// Canonical string for HQ signature: GZPROV|v|t|exp|nonce|canonicalData
+String canonicalProvision({
+  required int v,
+  required String t,
+  required int exp,
+  required String nonce,
+  required Map<String, Object?> data,
+}) {
+  return 'GZPROV|$v|$t|$exp|$nonce|${_canonicalData(data)}';
+}
+
 /// Wraps [data] in a typed, expiring v2 envelope. [now] is injectable for
-/// tests.
+/// tests. If [signature] is provided it is added as top-level `sig`.
 String encodeProvisionEnvelope({
   required ProvisionType type,
   required Map<String, Object?> data,
   int expiresInSeconds = kAccountLifetimeSeconds,
   int? now,
+  String? signature,
 }) {
   final ts = now ?? DateTime.now().millisecondsSinceEpoch ~/ 1000;
   final nonce = List.generate(8, (_) => Random.secure().nextInt(16).toRadixString(16)).join();
-  return jsonEncode({
+  final map = <String, Object?>{
     'v': 2,
     't': type.tag,
     'exp': ts + expiresInSeconds,
     'nonce': nonce,
     'data': data,
-  });
+  };
+  if (signature != null) map['sig'] = signature;
+  return jsonEncode(map);
 }
 
 /// Parses and validates a v2 envelope without trusting it. When
 /// [requireType] is given, any other type is rejected with a clear error.
-/// [now] is injectable for tests.
+/// [now] is injectable for tests. Returns the envelope even if `sig` is
+/// missing — the caller must verify `sig` against the HQ authority when it
+/// matters (fake-account block).
 EnvelopeParse parseProvisionEnvelope(
   String payload, {
   ProvisionType? requireType,
@@ -217,6 +242,7 @@ EnvelopeParse parseProvisionEnvelope(
   final exp = map['exp'];
   final nonce = map['nonce'];
   final data = map['data'];
+  final sig = map['sig'] as String?;
   if (type == null || exp is! int || nonce is! String || nonce.isEmpty) {
     return (envelope: null, error: 'malformed provision payload');
   }
@@ -239,6 +265,7 @@ EnvelopeParse parseProvisionEnvelope(
       expiresAt: exp,
       nonce: nonce,
       data: data,
+      signature: sig,
     ),
     error: null,
   );
@@ -262,6 +289,8 @@ enum ProvisionPurpose {
 /// Encodes an account into a typed v2 provisioning payload. The password hash
 /// (not the plaintext) travels in the QR so the holder of a captured frame
 /// cannot replay the account; only the password's digest is published.
+/// When [certB64] (GZCERT) and a `signer` are supplied the envelope is
+/// HQ-signed (`sig`) so fake QRs cannot be forged without the authority key.
 String encodeAccountProvision({
   required ProvisionPurpose purpose,
   required String username,
@@ -271,29 +300,50 @@ String encodeAccountProvision({
   String? familyId,
   String? officerId,
   String? authorityPub,
+  String? certB64,
+  String? Function(String canonical)? signer,
   int expiresInSeconds = kAccountLifetimeSeconds,
   int? now,
 }) {
-  return encodeProvisionEnvelope(
-    type: ProvisionType.account,
-    expiresInSeconds: expiresInSeconds,
-    now: now,
-    data: {
-      'p': purpose.tag,
-      'u': username,
-      'h': passwordHash,
-      'pin': ?pinHash,
-      'a': ?aadhaar,
-      'f': ?familyId,
-      'oid': ?officerId,
-      'ak': ?authorityPub,
-    },
-  );
+  final data = <String, Object?>{
+    'p': purpose.tag,
+    'u': username,
+    'h': passwordHash,
+    if (pinHash != null) 'pin': pinHash,
+    if (aadhaar != null) 'a': aadhaar,
+    if (familyId != null) 'f': familyId,
+    if (officerId != null) 'oid': officerId,
+    if (authorityPub != null) 'ak': authorityPub,
+    if (certB64 != null) 'cert': certB64,
+  };
+  if (signer == null) {
+    return encodeProvisionEnvelope(
+      type: ProvisionType.account,
+      expiresInSeconds: expiresInSeconds,
+      now: now,
+      data: data,
+    );
+  }
+  // Signed path: build unsigned envelope to get exp/nonce, then sign canonical.
+  final ts = now ?? DateTime.now().millisecondsSinceEpoch ~/ 1000;
+  final nonce = List.generate(8, (_) => Random.secure().nextInt(16).toRadixString(16)).join();
+  final exp = ts + expiresInSeconds;
+  final canonical = canonicalProvision(v: 2, t: ProvisionType.account.tag, exp: exp, nonce: nonce, data: data);
+  final sig = signer(canonical);
+  return jsonEncode({
+    'v': 2,
+    't': ProvisionType.account.tag,
+    'exp': exp,
+    'nonce': nonce,
+    'data': data,
+    'sig': sig,
+  });
 }
 
 /// Parses an account provisioning payload. Returns null on any malformed,
-/// expired, or non-account payload.
-({ProvisionPurpose purpose, String username, String passwordHash, String? pinHash, String? aadhaar, String? familyId, String? officerId, String? authorityPub})?
+/// expired, or non-account payload. The `sig` is not verified here — the
+/// caller must call `verifyProvisionEnvelope` with the HQ authority pub.
+({ProvisionPurpose purpose, String username, String passwordHash, String? pinHash, String? aadhaar, String? familyId, String? officerId, String? authorityPub, String? certB64, String? sig})?
 decodeAccountProvision(String payload, {int? now}) {
   final parsed = parseProvisionEnvelope(payload, requireType: ProvisionType.account, now: now);
   final env = parsed.envelope;
@@ -307,6 +357,7 @@ decodeAccountProvision(String payload, {int? now}) {
   final family = env.data['f'] as String?;
   final officerId = env.data['oid'] as String?;
   final authorityPub = env.data['ak'] as String?;
+  final cert = env.data['cert'] as String?;
   if (pin != null && pin.length != 64) return null;
   if (hash.length != 64) return null;
   return (
@@ -318,7 +369,29 @@ decodeAccountProvision(String payload, {int? now}) {
     familyId: family,
     officerId: officerId,
     authorityPub: authorityPub,
+    certB64: cert,
+    sig: env.signature,
   );
+}
+
+/// Returns true when `env` carries a `sig` that verifies against `authorityPubB64`.
+/// Canonical is `GZPROV|v|t|exp|nonce|canonicalData` where canonicalData is
+/// sorted-key JSON of `env.data`. Uses the same ECDSA verify as landmarks.
+bool verifyProvisionEnvelope(
+  ProvisionEnvelope env,
+  String authorityPubB64,
+  bool Function(List<int> pub, String canonical, List<int> sig) verifier,
+) {
+  final sigB64 = env.signature;
+  if (sigB64 == null) return false;
+  try {
+    final canonical = canonicalProvision(v: 2, t: env.type.tag, exp: env.expiresAt, nonce: env.nonce, data: env.data);
+    final sig = base64Decode(sigB64);
+    final pub = base64Decode(authorityPubB64);
+    return verifier(pub, canonical, sig);
+  } catch (_) {
+    return false;
+  }
 }
 
 /// Encodes a Tier-2 family card handoff. Unlike the old RSA-signed sample, the

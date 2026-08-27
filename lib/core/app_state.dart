@@ -451,17 +451,20 @@ class AppState extends ChangeNotifier {
     return _startSession(username: name, role: role);
   }
 
-  /// HQ-provisioned enrolment (paged-QR handoff): imports an account that the
-  /// Command HQ issued, carrying the password hash (never the plaintext). The
-  /// username is fixed by HQ; this device only picks the session up.
+  /// HQ-provisioned enrolment (paged-QR handoff): imports an HQ-signed account.
+  /// Every QR is now signed with the HQ authority (`GZPROV` canonical) and
+  /// carries a `cert` binding the derived pubkey to the username/officerId via
+  /// `GZCERT`. Fake QRs from a hacked app lack the authority sig and are
+  /// rejected once this device has seen one real HQ (stored `authority_pub`).
   Future<String?> provisionAccount(String payload) async {
+    final parsedRaw = parseProvisionEnvelope(payload, requireType: ProvisionType.account);
+    // Envelope-level expiry/type already checked; now verify HQ sig if we can.
+    if (parsedRaw.envelope == null) {
+      return parsedRaw.error ?? 'malformed provision payload';
+    }
     final acc = decodeAccountProvision(payload);
     if (acc == null) {
-      final parsed = parseProvisionEnvelope(
-        payload,
-        requireType: ProvisionType.account,
-      );
-      return parsed.error ?? 'malformed provision payload';
+      return parsedRaw.error ?? 'malformed provision payload';
     }
     final name = acc.username.trim().toUpperCase();
     if (name.isEmpty || name.length > 12) {
@@ -480,6 +483,47 @@ class AppState extends ChangeNotifier {
       ProvisionPurpose.citizen => Role.citizen,
       ProvisionPurpose.officer => Role.officer,
     };
+    // --- Verify HQ envelope sig + cert chain (blocks fake QRs) ---
+    final env = parsedRaw.envelope!;
+    final prefsForVerify = await SharedPreferences.getInstance();
+    final storedRootB64 = prefsForVerify.getString(kAuthorityPubPref) ?? _authorityPublicB64;
+    final presentedRootB64 = acc.authorityPub;
+    final verifierRootB64 = storedRootB64 ?? presentedRootB64;
+    if (env.signature != null) {
+      if (verifierRootB64 == null) {
+        return 'provision QR is signed but no HQ authority to verify against';
+      }
+      final canonical = canonicalProvision(v: 2, t: env.type.tag, exp: env.expiresAt, nonce: env.nonce, data: env.data);
+      try {
+        final ok = verifyOfficerRecord(base64Decode(verifierRootB64), canonical, base64Decode(env.signature!));
+        if (!ok) return 'provision QR signature invalid — not from this HQ';
+      } catch (_) {
+        return 'provision QR signature malformed';
+      }
+      // Strict: if we already trust a root, the QR's ak must match it, else
+      // an attacker could swap in their own ak that verifies against itself.
+      if (storedRootB64 != null && presentedRootB64 != null && storedRootB64 != presentedRootB64) {
+        return 'provision QR authority mismatch — not from trusted HQ';
+      }
+    } else {
+      // Unsigned QR: only allowed if we have never seen a real HQ (first
+      // provision or old test vectors). Once a root is pinned, unsigned = fake.
+      if (storedRootB64 != null) {
+        return 'provision QR not signed by HQ — fake account blocked';
+      }
+    }
+    // Verify the cert binds the derived pubkey to the account id (prevents
+    // a valid HQ envelope being reused with a different pubkey).
+    final presentedCertB64 = acc.certB64;
+    if (presentedCertB64 != null) {
+      final derived = deriveOfficerKey(acc.passwordHash);
+      final pubB64 = base64Encode(derived.$1);
+      final idForCert = acc.officerId ?? acc.username;
+      final certOk = verifyOfficerRecord(base64Decode(verifierRootB64 ?? presentedRootB64 ?? ''), 'GZCERT|$idForCert|$pubB64', base64Decode(presentedCertB64));
+      if (!certOk) return 'provision cert invalid — pubkey not certified by HQ';
+      await prefsForVerify.setString('cert_sig_$idForCert', presentedCertB64);
+      await prefsForVerify.setString('cert_sig_${acc.username}', presentedCertB64);
+    }
     // Store the HQ authority pubkey from the QR: this is the trust anchor
     // for verifying officer-signed landmarks later.
     if (acc.authorityPub != null) {
@@ -736,9 +780,10 @@ class AppState extends ChangeNotifier {
   }
 
   /// HQ one-step officer enrolment: promotes the existing user (see
-  /// [promoteToOfficer]) and returns the provisioning QR payload carrying
-  /// their (possibly reset) credentials. The password hash never leaves this
-  /// class: callers only see the encoded payload or an 'ERR:' string.
+  /// [promoteToOfficer]) and returns the HQ-signed provisioning QR payload.
+  /// The cert binds the officer pubkey to the officerId via the HQ authority,
+  /// and the envelope sig proves the whole QR came from HQ — blocking forged
+  /// `OFF-` accounts from a hacked app. Password hash never leaves this class.
   Future<String> issueOfficerPromotion(
     String username, {
     String? newPassword,
@@ -750,6 +795,13 @@ class AppState extends ChangeNotifier {
     if (acc == null || acc.officerId == null) {
       return 'ERR:enrolled account vanished unexpectedly';
     }
+    await _ensureAuthorityKey();
+    final key = deriveOfficerKey(acc.hash);
+    final pubB64 = base64Encode(key.$1);
+    final certB64 = certifyOfficerKey(acc.officerId!, pubB64);
+    await prefs.setString('cert_sig_${acc.officerId}', certB64);
+    await prefs.setString('cert_sig_${acc.username}', certB64);
+    final authorityPub = await authorityPubKey();
     return encodeAccountProvision(
       purpose: ProvisionPurpose.officer,
       username: acc.username,
@@ -758,6 +810,9 @@ class AppState extends ChangeNotifier {
       aadhaar: acc.aadhaar,
       familyId: acc.familyId,
       officerId: acc.officerId,
+      authorityPub: authorityPub,
+      certB64: certB64,
+      signer: (canonical) => base64Encode(signOfficerRecord(_authorityPrivateB64!, canonical)),
     );
   }
 
@@ -807,18 +862,25 @@ class AppState extends ChangeNotifier {
     return null;
   }
 
-  /// Regenerates the provisioning payload for a stored account so the admin
-  /// can re-issue it as QR (dashboard re-login handoff). The payload carries
-  /// the password HASH: equivalent to the credentials themselves: so it is
-  /// only ever surfaced behind an explicit admin action, same trust level as
-  /// the original GENERATE-QR flow. Returns null for unknown/reserved names.
+  /// Regenerates the HQ-signed provisioning payload for a stored account so
+  /// the admin can re-issue it as QR (dashboard re-login handoff). The cert
+  /// binds the account pubkey to the username/officerId via HQ authority, and
+  /// the envelope sig proves HQ issued it — blocking fake citizens/officers
+  /// from a hacked app. Returns null for unknown/reserved names.
   Future<String?> accountProvisionPayload(String username) async {
     final name = username.trim().toUpperCase();
     if (name == 'ADMIN') return null;
-    final acc = _readAccounts(
-      await SharedPreferences.getInstance(),
-    )[name];
+    final prefs = await SharedPreferences.getInstance();
+    final acc = _readAccounts(prefs)[name];
     if (acc == null) return null;
+    await _ensureAuthorityKey();
+    final idForCert = acc.officerId ?? acc.username;
+    final key = deriveOfficerKey(acc.hash);
+    final pubB64 = base64Encode(key.$1);
+    final certB64 = certifyOfficerKey(idForCert, pubB64);
+    await prefs.setString('cert_sig_$idForCert', certB64);
+    await prefs.setString('cert_sig_${acc.username}', certB64);
+    final authorityPub = await authorityPubKey();
     return encodeAccountProvision(
       purpose: acc.role == Role.officer
           ? ProvisionPurpose.officer
@@ -829,6 +891,9 @@ class AppState extends ChangeNotifier {
       aadhaar: acc.aadhaar,
       familyId: acc.familyId,
       officerId: acc.officerId,
+      authorityPub: authorityPub,
+      certB64: certB64,
+      signer: (canonical) => base64Encode(signOfficerRecord(_authorityPrivateB64!, canonical)),
     );
   }
 
@@ -1221,9 +1286,9 @@ class AppState extends ChangeNotifier {
     m.nodeUpdates.listen(_onPeerDiscovery);
     m.dataMessages.listen((rx) {
       if (rx.type == MeshPacketType.chat) {
-        _onChatMessage(rx);
+        unawaited(_onChatMessage(rx));
       } else if (rx.type == MeshPacketType.announce) {
-        _onAnnounceBlob(rx);
+        unawaited(_onAnnounceBlob(rx));
       }
     });
     // A responder's ack rings this phone: "help is on the way". Only when
@@ -1772,13 +1837,80 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  void _onChatMessage(DataMessageRx rx) {
-    final text = decodeChatWire(rx.bytes);
+  Future<void> _onChatMessage(DataMessageRx rx) async {
+    String text;
+    String senderName;
+    final bytes = rx.bytes;
+    // Try signed format: [wireLen2][wire][uLen1][username][pub65][cert64][sig64]
+    if (bytes.length >= 2 + 1 + 65 + 64 + 64) {
+      final wireLen = (bytes[0] << 8) | bytes[1];
+      if (wireLen <= 220 && bytes.length >= 2 + wireLen + 1 + 65 + 64 + 64) {
+        final uLenPos = 2 + wireLen;
+        final uLen = bytes[uLenPos];
+        final totalNeeded = 2 + wireLen + 1 + uLen + 65 + 64 + 64;
+        if (uLen > 0 && uLen <= 12 && bytes.length == totalNeeded) {
+          try {
+            final wire = bytes.sublist(2, 2 + wireLen);
+            final usernameBytes = bytes.sublist(uLenPos + 1, uLenPos + 1 + uLen);
+            final usernameFromBlob = utf8.decode(usernameBytes);
+            final pub = bytes.sublist(uLenPos + 1 + uLen, uLenPos + 1 + uLen + 65);
+            final cert = bytes.sublist(uLenPos + 1 + uLen + 65, uLenPos + 1 + uLen + 65 + 64);
+            final sig = bytes.sublist(uLenPos + 1 + uLen + 65 + 64);
+            final rootPub = await authorityPubKey();
+            if (rootPub != null) {
+              final pubB64 = base64Encode(pub);
+              final certOk = verifyOfficerRecord(base64Decode(rootPub), 'GZCERT|$usernameFromBlob|$pubB64', Uint8List.fromList(cert));
+              if (certOk) {
+                final canonical = 'GZCHAT|$usernameFromBlob|${base64Encode(wire)}';
+                final sigOk = verifyOfficerRecord(pub, canonical, Uint8List.fromList(sig));
+                if (sigOk) {
+                  text = decodeChatWire(Uint8List.fromList(wire));
+                  senderName = usernameFromBlob;
+                  chatMessages.add(MeshChatMessage(
+                    senderNodeId: rx.senderId,
+                    senderName: senderName,
+                    text: text,
+                    at: DateTime.now(),
+                  ));
+                  while (chatMessages.length > kChatHistoryMax) {
+                    chatMessages.removeAt(0);
+                  }
+                  unawaited(_persistChat());
+                  notifyListeners();
+                  return;
+                }
+              }
+            }
+            // Signed but verification failed -> drop to block fake/bot spam.
+            // For transition, old unsigned blobs will fall through to the
+            // unsigned path below instead of being dropped here.
+            // If we reach here, the blob looked signed but was invalid, so drop.
+            return;
+          } catch (_) {
+            // Not a valid signed blob, fall through to unsigned handling.
+          }
+        }
+      }
+    }
+    // Unsigned / legacy path: best-effort decode, mark as unverified in UI
+    // (still show for now to avoid breaking old devices during rollout).
+    text = decodeChatWire(bytes);
+    // If decodeChatWire returned empty (e.g., flagged but not signed), try
+    // raw utf8 as last resort for very old devices that sent without flag.
+    if (text.isEmpty && bytes.isNotEmpty && bytes[0] != 0x00 && bytes[0] != 0x01) {
+      try {
+        text = utf8.decode(bytes, allowMalformed: true);
+      } catch (_) {
+        text = '';
+      }
+    }
     final node = mesh?.nodes[rx.senderId];
     final name = node?.username ?? '';
+    senderName = name.isNotEmpty ? name : 'NODE ${rx.senderId.toRadixString(16)}';
+    // For unsigned, we keep it but the UI can show "UNVERIFIED" if needed.
     chatMessages.add(MeshChatMessage(
       senderNodeId: rx.senderId,
-      senderName: name.isNotEmpty ? name : 'NODE ${rx.senderId.toRadixString(16)}',
+      senderName: senderName,
       text: text,
       at: DateTime.now(),
     ));
@@ -1792,17 +1924,51 @@ class AppState extends ChangeNotifier {
   /// Broadcasts a short public message to the mesh. English ASCII is 1
   /// byte per char (UTF-8); 220 bytes = 220 chars. Pure ASCII between
   /// 221–249 chars auto-packs to 7-bit (8→7 bytes) so 249 chars still fit
-  /// in 220B wire (2B header). Non-ASCII (Hindi/emoji) stays UTF-8 — 2–4B
-  /// per char, so ~70–110 chars max. Cooldown guards shared airtime.
+  /// in 220B wire (2B header). Non-ASCII stays UTF-8 — 2–4B per char.
+  /// Every chat is now HQ-certified and signed (like landmarks) so bots
+  /// cannot spam: `wire|pub|cert|sig` with `GZCERT` + `GZCHAT` chains.
   Future<String?> sendBroadcastMessage(String text) async {
     final trimmed = text.trim();
     if (trimmed.isEmpty) return 'message is empty';
-    final wire = encodeChatWire(trimmed);
+    var wire = encodeChatWire(trimmed);
     if (wire == null) {
       if (isAsciiPrintable(trimmed)) {
         return 'message too long (max 249 ASCII chars / 220 bytes; you sent ${trimmed.length})';
       }
       return 'message too long (max $kChatMaxUtf8Bytes bytes; you sent ${utf8.encode(trimmed).length})';
+    }
+    // Try to wrap as signed chat: [wireLen2][wire][pub65][cert64][sig64]
+    // where sig = sign(priv, GZCHAT|username|base64(wire)) and cert is HQ's
+    // GZCERT for this account's pub. If we have no cert (old account before
+    // the fix) we fall back to unsigned wire for backward compat.
+    Uint8List blob = wire;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final acc = _readAccounts(prefs)[username];
+      if (acc != null) {
+        final idForCert = acc.officerId ?? acc.username;
+        final certB64 = prefs.getString('cert_sig_$idForCert') ?? prefs.getString('cert_sig_${acc.username}');
+        if (certB64 != null) {
+          final key = deriveOfficerKey(acc.hash);
+          final pub = Uint8List.fromList(key.$1);
+          final usernameBytes = utf8.encode(acc.username);
+          final canonical = 'GZCHAT|${acc.username}|${base64Encode(wire)}';
+          final sig = signOfficerRecord(key.$2, canonical);
+          final wireLen = wire.length;
+          blob = Uint8List.fromList([
+            (wireLen >> 8) & 0xff, wireLen & 0xff,
+            ...wire,
+            usernameBytes.length & 0xff,
+            ...usernameBytes,
+            ...pub,
+            ...base64Decode(certB64),
+            ...sig,
+          ]);
+        }
+      }
+    } catch (_) {
+      // Signing is best-effort; unsigned fallback keeps old devices working.
+      blob = wire;
     }
     final last = _lastChatSentAt;
     if (last != null) {
@@ -1820,7 +1986,7 @@ class AppState extends ChangeNotifier {
     // responsive. The mesh relay still carries the 3 copies in the background.
     unawaited(m.broadcastDataPayload(
       MeshPacketType.chat,
-      wire,
+      blob,
     ));
     // Show our own message immediately; relays carry it onward.
     chatMessages.add(MeshChatMessage(

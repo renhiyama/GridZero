@@ -122,10 +122,20 @@ class BluezMeshAdapter implements MeshAdapter {
     _dutyCycleTimer?.cancel();
     _scanOn = true;
     try {
-      await _adapter!.startDiscovery();
+      // Already discovering → don't re-enter; BlueZ throws InProgress and
+      // the burst's boostScan() can otherwise spam the log every 15s.
+      final discovering = _adapter!.discovering;
+      if (!discovering) {
+        await _adapter!.startDiscovery();
+      }
     } catch (e) {
-      _error = 'discovery: $e';
-      debugPrint('GridZero: bluez discovery failed: $e');
+      final msg = e.toString();
+      if (msg.contains('InProgress') || msg.contains('Already')) {
+        // Benign race: another scanWindow/boost already started discovery.
+      } else {
+        _error = 'discovery: $e';
+        debugPrint('GridZero: bluez discovery failed: $e');
+      }
     }
     _dutyCycleTimer = Timer(_jittered(_scanWindowDuration), _sleepWindow);
   }

@@ -254,8 +254,14 @@ class NativeMeshAdapter implements MeshAdapter {
         // coords/identity exchange finishes in ~1s, not after a sleep gap.
         // A peer's SOS (not cleared) keeps us scanning continuously until its
         // lease lapses; a cleared alarm drops us straight back out.
-        if (!_peers.containsKey(packet.senderId)) {
+        // Chat/announce from a known peer must also burst — otherwise a
+        // single-chunk "loda lasan" that lands while we sleep 9s is lost;
+        // the next 500ms chunk is already gone.
+        final isChatBurst = packet.type == MeshPacketType.chat ||
+            packet.type == MeshPacketType.announce;
+        if (!_peers.containsKey(packet.senderId) || isChatBurst) {
           _burstUntil = now + _burstLease.inMilliseconds;
+          if (isChatBurst) _scheduleScanCycle();
         }
         if (packet.type == MeshPacketType.sosBeacon) {
           _peerSosUntil = packet.sosCleared

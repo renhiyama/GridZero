@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 
 import '../app_scope.dart';
 import '../core/app_state.dart';
+import '../core/chat_codec.dart';
 import 'hud_theme.dart';
 
 class ChatScreen extends StatefulWidget {
@@ -21,8 +22,10 @@ class ChatScreen extends StatefulWidget {
 
 class _ChatScreenState extends State<ChatScreen> {
   final _composer = TextEditingController();
+  final _scroll = ScrollController();
   int _cooldownLeft = 0;
   bool _sending = false;
+  int _seenCount = 0;
 
   @override
   void initState() {
@@ -34,9 +37,23 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
+  void _maybeScrollToBottom(int count) {
+    if (count == _seenCount) return;
+    _seenCount = count;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_scroll.hasClients) return;
+      _scroll.animateTo(
+        _scroll.position.maxScrollExtent,
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeOut,
+      );
+    });
+  }
+
   @override
   void dispose() {
     _composer.dispose();
+    _scroll.dispose();
     super.dispose();
   }
 
@@ -101,9 +118,12 @@ class _ChatScreenState extends State<ChatScreen> {
                 ),
               ),
               Expanded(
-                child: ListView(
-                  padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-                  children: [
+                child: Builder(builder: (context) {
+                  _maybeScrollToBottom(messages.length);
+                  return ListView(
+                    controller: _scroll,
+                    padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+                    children: [
                     // Verified landmarks pinned above the conversation.
                     if (landmarks.isNotEmpty) ...[
                       HudPanel(
@@ -162,9 +182,10 @@ class _ChatScreenState extends State<ChatScreen> {
                         ),
                       )
                     else
-                      ...messages.reversed.map(_bubble),
+                      ...messages.map(_bubble),
                   ],
-                ),
+                  );
+                }),
               ),
               // Composer
               Container(
@@ -178,7 +199,8 @@ class _ChatScreenState extends State<ChatScreen> {
                     Expanded(
                       child: TextField(
                         controller: _composer,
-                        maxLength: 220,
+                        maxLength: 249,
+                        onChanged: (_) => setState(() {}),
                         style: TextStyle(
                           fontFamily: 'monospace',
                           fontSize: 12,
@@ -214,17 +236,20 @@ class _ChatScreenState extends State<ChatScreen> {
                   ],
                 ),
               ),
-              Text(
-                _cooldownLeft > 0
-                    ? 'AIRTIME COOLDOWN · ${_cooldownLeft}s'
-                    : 'mesh broadcast · ${AppState.kChatMaxUtf8Bytes} byte '
-                        'limit · ${AppState.kChatCooldownS}s cooldown',
-                style: TextStyle(
-                  color: p.textDim,
-                  fontFamily: 'monospace',
-                  fontSize: 9,
-                ),
-              ),
+              Builder(builder: (context) {
+                final wl = wireLengthFor(_composer.text.trim());
+                final hint = _composer.text.trim().isEmpty
+                    ? 'mesh broadcast · ${AppState.kChatMaxUtf8Bytes}B wire · ${AppState.kChatCooldownS}s cooldown · 220 ASCII chars (249 packed English) or ~70 Hindi/emoji'
+                    : 'on wire ${wl ?? 0}/220B · ${AppState.kChatCooldownS}s cooldown';
+                return Text(
+                  _cooldownLeft > 0 ? 'AIRTIME COOLDOWN · ${_cooldownLeft}s' : hint,
+                  style: TextStyle(
+                    color: p.textDim,
+                    fontFamily: 'monospace',
+                    fontSize: 9,
+                  ),
+                );
+              }),
               const SizedBox(height: 6),
             ],
           );

@@ -394,23 +394,22 @@ class MeshController {
   /// split into 11-byte chunks. Enqueueing is PACED slower than the adapter
   /// rotation drain: dumping all chunks at once overflows the queue, whose
   /// head-drop then starves indices and the far end never reassembles.
+  /// Chat is life-critical for the demo and has no ACK, so the same payload
+  /// is aired 3× (with dedupKey reuse) — a sleeping BlueZ/Native scanner that
+  /// missed the first burst still catches the second while neighbours dedup.
   Future<void> broadcastDataPayload(
     MeshPacketType type,
-    Uint8List blob,
-  ) async {
+    Uint8List blob, {
+    int repeatOverride = 0,
+  }) async {
     final total = (blob.length / MeshDataChunk.chunkBytes).ceil();
     if (total < 1 || total > 40) {
       throw ArgumentError('payload size out of range for chunked frames');
     }
+    // Build once so retransmits reuse the same dedupKey (seq) — already-seen
+    // peers drop the duplicate, missed peers get a second chance.
+    final packets = <MeshPacket>[];
     for (var i = 0; i < total; i++) {
-      var waited = 0;
-      while (true) {
-        final depth =
-            int.tryParse(adapter.diagnostics['advQueue'] ?? '0') ?? 0;
-        if (depth <= 4 || waited > 8000) break;
-        await Future<void>.delayed(const Duration(milliseconds: 100));
-        waited += 100;
-      }
       final slice = Uint8List.sublistView(
         blob,
         i * MeshDataChunk.chunkBytes,
@@ -430,9 +429,50 @@ class MeshController {
         ),
       );
       _dedup.insert(packet.dedupKey);
-      await adapter.broadcast(packet);
-      if (i < total - 1) {
-        await Future<void>.delayed(const Duration(milliseconds: 500));
+      packets.add(packet);
+    }
+    // Single-chunk chat (most messages are ~1 chunk: 11B) is the common
+    // loss case: a 400ms dwell is shorter than a 9s NOMINAL sleep, so a
+    // phone that is asleep when the chunk airs misses it entirely. Make it
+    // sticky for 12s so any scanner wakes into it, then revert to heartbeat.
+    if (packets.length == 1 && type == MeshPacketType.chat) {
+      await adapter.broadcast(packets.first, persistent: true);
+      // Keep the chat payload as the long-dwell slot for 12s so a 9s sleeper
+      // is guaranteed one window, then restore the heartbeat announce.
+      Future<void>.delayed(const Duration(seconds: 12), () async {
+        try {
+          await announce();
+        } catch (_) {}
+      });
+      // Also queue two more transient copies for immediate neighbours that
+      // may have been mid-scan and need a second chance quickly.
+      await Future<void>.delayed(const Duration(milliseconds: 800));
+      await adapter.broadcast(packets.first);
+      await Future<void>.delayed(const Duration(milliseconds: 800));
+      await adapter.broadcast(packets.first);
+      return;
+    }
+    final repeat = repeatOverride != 0
+        ? repeatOverride
+        : (type == MeshPacketType.chat ? 3 : 1);
+    for (var r = 0; r < repeat; r++) {
+      for (var i = 0; i < packets.length; i++) {
+        var waited = 0;
+        while (true) {
+          final depth =
+              int.tryParse(adapter.diagnostics['advQueue'] ?? '0') ?? 0;
+          if (depth <= 4 || waited > 8000) break;
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+          waited += 100;
+        }
+        await adapter.broadcast(packets[i]);
+        if (i < packets.length - 1) {
+          await Future<void>.delayed(const Duration(milliseconds: 500));
+        }
+      }
+      if (r < repeat - 1) {
+        // Let the scanner breathe and the queue drain before the next copy.
+        await Future<void>.delayed(const Duration(milliseconds: 800));
       }
     }
   }

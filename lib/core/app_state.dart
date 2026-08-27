@@ -16,6 +16,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:sensors_plus/sensors_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'chat_codec.dart';
 import 'ledger/ledger_store.dart';
 import 'ledger/officer_sign.dart';
 import 'ledger/open.dart';
@@ -1772,7 +1773,7 @@ class AppState extends ChangeNotifier {
   }
 
   void _onChatMessage(DataMessageRx rx) {
-    final text = utf8.decode(rx.bytes, allowMalformed: true);
+    final text = decodeChatWire(rx.bytes);
     final node = mesh?.nodes[rx.senderId];
     final name = node?.username ?? '';
     chatMessages.add(MeshChatMessage(
@@ -1788,14 +1789,20 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Broadcasts a short public message to the mesh. Enforces length and a
-  /// per-device cooldown: shared airtime is the scarce resource here.
+  /// Broadcasts a short public message to the mesh. English ASCII is 1
+  /// byte per char (UTF-8); 220 bytes = 220 chars. Pure ASCII between
+  /// 221–249 chars auto-packs to 7-bit (8→7 bytes) so 249 chars still fit
+  /// in 220B wire (2B header). Non-ASCII (Hindi/emoji) stays UTF-8 — 2–4B
+  /// per char, so ~70–110 chars max. Cooldown guards shared airtime.
   Future<String?> sendBroadcastMessage(String text) async {
     final trimmed = text.trim();
     if (trimmed.isEmpty) return 'message is empty';
-    final bytes = utf8.encode(trimmed);
-    if (bytes.length > kChatMaxUtf8Bytes) {
-      return 'message too long (max $kChatMaxUtf8Bytes bytes)';
+    final wire = encodeChatWire(trimmed);
+    if (wire == null) {
+      if (isAsciiPrintable(trimmed)) {
+        return 'message too long (max 249 ASCII chars / 220 bytes; you sent ${trimmed.length})';
+      }
+      return 'message too long (max $kChatMaxUtf8Bytes bytes; you sent ${utf8.encode(trimmed).length})';
     }
     final last = _lastChatSentAt;
     if (last != null) {
@@ -1808,10 +1815,13 @@ class AppState extends ChangeNotifier {
     final m = mesh;
     if (m == null) return 'mesh radio not ready';
     _lastChatSentAt = DateTime.now();
-    await m.broadcastDataPayload(
+    // 3× airing is ~30s of BLE rotation; don't block the UI or hot-restart
+    // on it — fire-and-forget so the button, cooldown and hot-reload stay
+    // responsive. The mesh relay still carries the 3 copies in the background.
+    unawaited(m.broadcastDataPayload(
       MeshPacketType.chat,
-      Uint8List.fromList(bytes),
-    );
+      wire,
+    ));
     // Show our own message immediately; relays carry it onward.
     chatMessages.add(MeshChatMessage(
       senderNodeId: m.nodeId,
@@ -2029,13 +2039,13 @@ class AppState extends ChangeNotifier {
     final lonFixed =
         (longitude * 10000000).round().clamp(-2147483648, 2147483647);
     // The certificate minted above binds this pubkey; reuse it.
-    final pubB64 = base64Encode(key.$1);
     final certB64 = prefs.getString('cert_sig_$id') ?? '';
-    // Canonical string covers everything a verifier checks; the certificate
-    // binds the officer pubkey so no roster lookup is needed anywhere.
+    // Canonical covers exactly what the verifier checks (lat/lon as 7-decimal);
+    // the certificate + pubkey travel alongside the blob for chain 1.
     final canonical =
-        'GZANN1|${latFixed / 10000000.0}|${lonFixed / 10000000.0}|'
-        '$typeCode|$expiry|$clean|$pubB64|$certB64';
+        'GZANN1|${(latFixed / 10000000.0).toStringAsFixed(7)}|'
+        '${(lonFixed / 10000000.0).toStringAsFixed(7)}|'
+        '$typeCode|$expiry|$clean';
     final signature = signOfficerRecord(key.$2, canonical);
     final idBytes = utf8.encode(id);
     final head = <int>[
@@ -2368,6 +2378,26 @@ class AppState extends ChangeNotifier {
       ],
       'lastFaceEnrollAt': lastFaceEnrollAt?.toIso8601String(),
       'lastDataExchangeAt': lastDataExchangeAt?.toIso8601String(),
+      'chat': [
+        for (final m in chatMessages)
+          {'from': m.senderName, 'text': m.text, 'at': m.at.toIso8601String()},
+      ],
+      'landmarks': [
+        for (final l in officialLandmarks)
+          {
+            'label': l.label,
+            'type': l.typeLabel,
+            'by': l.officerId,
+            'at': '${l.latitude.toStringAsFixed(4)},${l.longitude.toStringAsFixed(4)}',
+            'exp': l.expiresAt.toIso8601String(),
+          },
+      ],
+      'lastChatSentAt': _lastChatSentAt?.toIso8601String(),
+      'chatCooldownLeft': _lastChatSentAt == null
+          ? 0
+          : (kChatCooldownS -
+                  DateTime.now().difference(_lastChatSentAt!).inSeconds)
+              .clamp(0, kChatCooldownS),
     });
   }
 

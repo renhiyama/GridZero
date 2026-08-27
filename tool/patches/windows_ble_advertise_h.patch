@@ -1,5 +1,5 @@
---- /home/ren/.pub-cache/hosted/pub.dev/ble_peripheral_plus-2.5.4/windows/ble_peripheral_plugin.h.bak	2026-08-27 00:48:32.009947905 +0530
-+++ /home/ren/.pub-cache/hosted/pub.dev/ble_peripheral_plus-2.5.4/windows/ble_peripheral_plugin.h	2026-08-27 00:48:50.597128681 +0530
+--- a/windows/ble_peripheral_plugin.h	2026-08-27 00:48:32.009947905 +0530
++++ b/windows/ble_peripheral_plugin.h	2026-08-27 00:48:50.597128681 +0530
 @@ -84,6 +84,11 @@
          // BluetoothLe
          Radio bluetoothRadio{nullptr};

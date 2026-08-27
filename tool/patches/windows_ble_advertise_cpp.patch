@@ -1,5 +1,5 @@
---- /home/ren/.pub-cache/hosted/pub.dev/ble_peripheral_plus-2.5.4/windows/ble_peripheral_plugin.cpp.bak	2026-08-27 00:48:32.011947835 +0530
-+++ /home/ren/.pub-cache/hosted/pub.dev/ble_peripheral_plus-2.5.4/windows/ble_peripheral_plugin.cpp	2026-08-27 00:48:50.597767023 +0530
+--- a/windows/ble_peripheral_plugin.cpp	2026-08-27 00:48:32.011947835 +0530
++++ b/windows/ble_peripheral_plugin.cpp	2026-08-27 00:48:50.597767023 +0530
 @@ -74,8 +74,9 @@
  
    ErrorOr<std::optional<bool>> BlePeripheralPlugin::IsAdvertising()

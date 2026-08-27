@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
+import os
 import pathlib
-p = pathlib.Path.home() / ".pub-cache/hosted/pub.dev/ble_peripheral_plus-2.5.4/windows/CMakeLists.txt"
+base = pathlib.Path(os.environ.get("PUB_CACHE", str(pathlib.Path.home() / ".pub-cache"))) / "hosted/pub.dev/ble_peripheral_plus-2.5.4/windows"
+p = base / "CMakeLists.txt"
+if not p.exists():
+    win_path = pathlib.Path.home() / "AppData/Local/Pub/Cache/hosted/pub.dev/ble_peripheral_plus-2.5.4/windows/CMakeLists.txt"
+    if win_path.exists():
+        p = win_path
 if not p.exists():
     print(f"skip: {p} not found (not Windows)")
     exit(0)

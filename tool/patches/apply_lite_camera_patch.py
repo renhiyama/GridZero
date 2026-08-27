@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Idempotent applier for flutter_lite_camera 0.1.0 RestartCapture patch."""
+import os
 import pathlib, re
-base = pathlib.Path.home() / ".pub-cache/hosted/pub.dev/flutter_lite_camera-0.1.0"
+base = pathlib.Path(os.environ.get("PUB_CACHE", str(pathlib.Path.home() / ".pub-cache"))) / "hosted/pub.dev/flutter_lite_camera-0.1.0"
 h = base / "linux/include/Camera.h"
 cpp = base / "linux/CameraLinux.cpp"
 if not h.exists():

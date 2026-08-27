@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Idempotent applier for wifi_iot 0.3.19+2 android/build.gradle minimal stub."""
+import os
 import pathlib
-p = pathlib.Path.home() / ".pub-cache/hosted/pub.dev/wifi_iot-0.3.19+2/android/build.gradle"
+p = pathlib.Path(os.environ.get("PUB_CACHE", str(pathlib.Path.home() / ".pub-cache"))) / "hosted/pub.dev/wifi_iot-0.3.19+2/android/build.gradle"
 if not p.exists():
     print(f"skip: {p} not found")
     exit(0)

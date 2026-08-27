@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
 """Idempotent patcher for ble_peripheral_plus Windows manufacturer-data advertise."""
+import os
 import pathlib
 
-base = pathlib.Path.home() / ".pub-cache/hosted/pub.dev/ble_peripheral_plus-2.5.4/windows"
+base = pathlib.Path(os.environ.get("PUB_CACHE", str(pathlib.Path.home() / ".pub-cache"))) / "hosted/pub.dev/ble_peripheral_plus-2.5.4/windows"
+if not base.exists():
+    # Windows Pub cache is at %LOCALAPPDATA%\Pub\Cache
+    win_path = pathlib.Path.home() / "AppData/Local/Pub/Cache/hosted/pub.dev/ble_peripheral_plus-2.5.4/windows"
+    if win_path.exists():
+        base = win_path
 h = base / "ble_peripheral_plugin.h"
 cpp = base / "ble_peripheral_plugin.cpp"
 
@@ -32,16 +38,14 @@ if "publisherStarted && advertisementPublisher" not in cpt:
         # For CI, the patch file will be used via `patch -p1` with relative paths
         import subprocess
         root = pathlib.Path(__file__).resolve().parents[2]
-        for diff in [root / "tool/patches/windows_ble_advertise_h.patch", root / "tool/patches/windows_ble_advertise_cpp.patch"]:
-            if diff.exists():
-                # Use patch with -p3 to handle absolute paths by stripping 3 components
-                # The diff has "--- /home/ren/.pub-cache/..." which is absolute, so we use -p5
-                # Better to just use git apply or direct
-                result = subprocess.run(["patch", "-p1", "-N", "-i", str(diff)], cwd=str(pathlib.Path.home() / ".pub-cache/hosted/pub.dev/ble_peripheral_plus-2.5.4"), check=False, capture_output=True, text=True)
-                if result.returncode != 0:
-                    print(f"patch fallback failed for {diff.name}: {result.stderr[:200]}")
-                else:
-                    print(f"patched {diff.name} via patch -p5")
+        # h was already patched via direct above, only cpp needs patch fallback
+        diff = root / "tool/patches/windows_ble_advertise_cpp.patch"
+        if diff.exists():
+            result = subprocess.run(["patch", "-p1", "-N", "-i", str(diff)], cwd=str(pathlib.Path(os.environ.get("PUB_CACHE", str(pathlib.Path.home() / ".pub-cache"))) / "hosted/pub.dev/ble_peripheral_plus-2.5.4"), check=False, capture_output=True, text=True)
+            if result.returncode != 0:
+                print(f"patch fallback failed for {diff.name}: {result.stderr[:200]}")
+            else:
+                print(f"patched {diff.name} via patch -p1")
         print("cpp patched via direct fallback")
     except Exception as e:
         print(f"cpp patch failed: {e}")

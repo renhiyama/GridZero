@@ -88,6 +88,14 @@ before `flutter build windows`.
 - **Verify:** `grep PLUGIN_NAME ~/.pub-cache/hosted/pub.dev/ble_peripheral_plus-2.5.4/windows/CMakeLists.txt` should show `ble_peripheral_plus_plugin`; `flutter build windows --release` on `windows-latest` should generate without `No target` error.
 - **History:** Added 2026-08-28 after CI `windows-2025` failure on `33094135901`.
 
+### 6. VS 2022 18 (`14.51`) — `experimental/coroutine` deprecation (Windows)
+
+- **Pub-cache path:** `~/.pub-cache/hosted/pub.dev/ble_peripheral_plus-2.5.4/windows/CMakeLists.txt` and `permission_handler_windows-0.2.2/windows/CMakeLists.txt`
+- **Upstream bug:** Both plugins use `winrt`/`cppwinrt` which pulls `C:\Program Files\Microsoft Visual Studio\18\...\include\experimental\coroutine` (deprecated, `/await` still set). MSVC 14.51 errors `STL1011: ... will be REMOVED SOON. Define _SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS`.
+- **Fix:** `tool/patches/ble_peripheral_plus_msvc_coroutine.patch` + `tool/patches/apply_msvc_coroutine_patch.py` add `target_compile_definitions(${PLUGIN_NAME} PRIVATE _SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS)` to both plugins. Applier is idempotent and handles `PUB_CACHE` vs `AppData/Local` on Windows.
+- **Verify:** `grep SILENCE ~/.pub-cache/hosted/pub.dev/ble_peripheral_plus-2.5.4/windows/CMakeLists.txt` should show 1 hit; `flutter build windows --release` on `windows-2025` (VS 18) should pass without `C2338`.
+- **History:** Added 2026-08-28 after CI `windows-2025` `14.51.36231` failure on `33103270197` → `01611f9` (`experimental/coroutine(37,1): error C2338`).
+
 ## Apply script
 
 `tool/apply_patches.sh` (executable):

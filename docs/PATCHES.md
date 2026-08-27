@@ -80,6 +80,14 @@ before `flutter build windows`.
 - **Verify:** `grep -n advertisementPublisher ~/.pub-cache/hosted/pub.dev/ble_peripheral_plus-2.5.4/windows/ble_peripheral_plugin.h` should show 4 hits; on a Windows host `flutter build windows --release` should succeed and `diagnostics` on the Windows HQ should show `tier` without `winAdv: UNSUPPORTED`.
 - **Constraint:** Requires Win10 10240+ and `bluetooth` capability (already declared in `windows/runner/Runner.rc` via Flutter). Payload must stay ≤31B legacy (GridZero uses 20B: 2B company + 18B mesh) or enable `UseExtendedAdvertisement` for 254B.
 
+### 5. `ble_peripheral_plus 2.5.4` — Windows `CMakeLists.txt` PLUGIN_NAME mismatch
+
+- **Pub-cache path:** `~/.pub-cache/hosted/pub.dev/ble_peripheral_plus-2.5.4/windows/CMakeLists.txt`
+- **Upstream bug:** `set(PLUGIN_NAME "ble_peripheral_plugin")` (without `_plus`) while Dart pubspec declares `ble_peripheral_plus` and Flutter's `generated_plugins.cmake` looks for `ble_peripheral_plus_plugin` via `$<TARGET_FILE:ble_peripheral_plus_plugin>`. CMake fails `No target "ble_peripheral_plus_plugin"` on Windows.
+- **Fix:** `tool/patches/ble_peripheral_plus_windows_cmake.patch` changes `PLUGIN_NAME` to `ble_peripheral_plus_plugin`; applier `tool/patches/apply_ble_cmake_patch.py` checks sentinel `ble_peripheral_plus_plugin` before patching.
+- **Verify:** `grep PLUGIN_NAME ~/.pub-cache/hosted/pub.dev/ble_peripheral_plus-2.5.4/windows/CMakeLists.txt` should show `ble_peripheral_plus_plugin`; `flutter build windows --release` on `windows-latest` should generate without `No target` error.
+- **History:** Added 2026-08-28 after CI `windows-2025` failure on `33094135901`.
+
 ## Apply script
 
 `tool/apply_patches.sh` (executable):

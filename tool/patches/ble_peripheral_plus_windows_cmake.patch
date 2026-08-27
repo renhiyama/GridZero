@@ -1,0 +1,11 @@
+--- a/windows/CMakeLists.txt
++++ b/windows/CMakeLists.txt
+@@ -4,7 +4,7 @@
+ cmake_policy(VERSION 3.14...3.25)
+ include(FetchContent)
+ set(CPPWINRT_VERSION "2.0.220418.1")
+-set(PLUGIN_NAME "ble_peripheral_plugin")
++set(PLUGIN_NAME "ble_peripheral_plus_plugin")
+ 
+ # ############### NuGet intall begin ################
+ FetchContent_Declare(nuget

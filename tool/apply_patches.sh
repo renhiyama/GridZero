@@ -11,8 +11,11 @@ python3 "$ROOT/tool/patches/apply_lite_camera_patch.py" 2>&1 | sed 's/^/[patch] 
 echo "[patch] 2/3 wifi_iot 0.3.19+2 android/build.gradle (jcenter strip)..."
 python3 "$ROOT/tool/patches/apply_wifi_iot_patch.py" 2>&1 | sed 's/^/[patch] /'
 
-echo "[patch] 3/3 ble_peripheral_plus 2.5.4 windows BLE advertise (BluetoothLEAdvertisementPublisher)..."
+echo "[patch] 3/4 ble_peripheral_plus 2.5.4 windows BLE advertise (BluetoothLEAdvertisementPublisher)..."
 python3 "$ROOT/tool/patches/apply_windows_ble_patch.py" 2>&1 | sed 's/^/[patch] /'
+
+echo "[patch] 4/4 ble_peripheral_plus 2.5.4 windows CMake PLUGIN_NAME (plus)..."
+python3 "$ROOT/tool/patches/apply_ble_cmake_patch.py" 2>&1 | sed 's/^/[patch] /'
 
 # flutter_litert 3.8.0 currently needs no patch; probe and warn if stale
 if grep -q "jcenter" "$HOME/.pub-cache/hosted/pub.dev/flutter_litert-3.8.0/android/build.gradle" 2>/dev/null; then

@@ -10,7 +10,7 @@ jobs:
   analyze-test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
@@ -18,7 +18,7 @@ jobs:
       - name: Install Linux deps (for analyze)
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev
+          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgstreamer-plugins-bad1.0-dev libsecret-1-dev
       - name: Apply patches & verify
         run: |
           flutter pub get
@@ -31,7 +31,7 @@ jobs:
     needs: analyze-test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
@@ -39,7 +39,7 @@ jobs:
       - name: Install Linux build deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev
+          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgstreamer-plugins-bad1.0-dev libsecret-1-dev
       - name: Apply patches
         run: |
           flutter pub get
@@ -47,7 +47,7 @@ jobs:
           flutter pub get
       - name: Build Linux release
         run: flutter build linux --release
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: gridzero-linux-x64
           path: build/linux/x64/release/bundle/
@@ -57,7 +57,7 @@ jobs:
     needs: analyze-test
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
@@ -70,7 +70,7 @@ jobs:
           flutter pub get
       - name: Build Windows release
         run: flutter build windows --release
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: gridzero-windows-x64
           path: build/windows/x64/runner/Release/
@@ -79,8 +79,8 @@ jobs:
     needs: analyze-test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
@@ -97,14 +97,18 @@ jobs:
           bash tool/apply_patches.sh
           flutter pub get
       - name: Build APK release (unsigned, CI)
-        run: flutter build apk --release
+        run: flutter build apk --release --verbose
+        env:
+          GRADLE_OPTS: "-Dorg.gradle.vfs.watch=false -Dorg.gradle.daemon=false"
       - name: Build AppBundle release (unsigned, CI)
         run: flutter build appbundle --release
-      - uses: actions/upload-artifact@v4
+        env:
+          GRADLE_OPTS: "-Dorg.gradle.vfs.watch=false -Dorg.gradle.daemon=false"
+      - uses: actions/upload-artifact@v5
         with:
           name: gridzero-android-apk
           path: build/app/outputs/flutter-apk/app-release.apk
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: gridzero-android-aab
           path: build/app/outputs/bundle/release/app-release.aab
@@ -116,7 +120,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         with:
           path: artifacts
       - name: Zip Linux bundle

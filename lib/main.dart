@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:developer' as developer;
 import 'package:dynamic_color/dynamic_color.dart';
 import 'package:flutter/material.dart';
@@ -131,13 +132,56 @@ class GridZeroApp extends StatelessWidget {
   }
 }
 
-/// VM-service debug hook for live two-device diagnosis. Not wired to any UI:
-/// call `ext.gridzero.syncDebug` over the Dart VM Service to read the sync
-/// state of a running app (phone or laptop).
+/// VM-service debug hooks for live two-device diagnosis and automated testing.
 void registerSyncDebugExtension(AppState state) {
   developer.registerExtension('ext.gridzero.syncDebug', (method, parameters) {
     return state.syncDebugJson().then(
       (json) => developer.ServiceExtensionResponse.result(json),
     );
+  });
+  developer.registerExtension('ext.gridzero.wipe', (method, parameters) async {
+    await state.deleteAllData();
+    return developer.ServiceExtensionResponse.result('{"ok":true}');
+  });
+  developer.registerExtension('ext.gridzero.register', (method, parameters) async {
+    final username = parameters['username'] ?? '';
+    final password = parameters['password'] ?? 'pass1234';
+    final role = parameters['role'] == 'officer' ? Role.officer : Role.citizen;
+    final err = await state.register(username, password, role);
+    if (err != null) return developer.ServiceExtensionResponse.error(400, err);
+    return developer.ServiceExtensionResponse.result('{"ok":true,"user":"$username"}');
+  });
+  developer.registerExtension('ext.gridzero.login', (method, parameters) async {
+    final username = parameters['username'] ?? '';
+    final password = parameters['password'] ?? 'pass1234';
+    final err = await state.login(username, password);
+    if (err != null) return developer.ServiceExtensionResponse.error(400, err);
+    return developer.ServiceExtensionResponse.result('{"ok":true}');
+  });
+  developer.registerExtension('ext.gridzero.chat', (method, parameters) async {
+    final text = parameters['text'] ?? '';
+    final err = await state.sendBroadcastMessage(text);
+    if (err != null) return developer.ServiceExtensionResponse.error(400, err);
+    return developer.ServiceExtensionResponse.result('{"ok":true}');
+  });
+  developer.registerExtension('ext.gridzero.landmark', (method, parameters) async {
+    final label = parameters['label'] ?? 'TEST';
+    final lat = double.tryParse(parameters['lat'] ?? '20.5937') ?? 20.5937;
+    final lon = double.tryParse(parameters['lon'] ?? '78.9629') ?? 78.9629;
+    final err = await state.postOfficialLandmark(label: label, typeCode: 0, latitude: lat, longitude: lon, validFor: const Duration(hours: 24));
+    if (err != null) return developer.ServiceExtensionResponse.error(400, err);
+    return developer.ServiceExtensionResponse.result('{"ok":true}');
+  });
+  developer.registerExtension('ext.gridzero.accountPayload', (method, parameters) async {
+    final username = parameters['username'] ?? '';
+    final payload = await state.accountProvisionPayload(username);
+    if (payload == null) return developer.ServiceExtensionResponse.error(404, 'no such account');
+    return developer.ServiceExtensionResponse.result(jsonEncode({'payload': payload}));
+  });
+  developer.registerExtension('ext.gridzero.provision', (method, parameters) async {
+    final payload = parameters['payload'] ?? '';
+    final err = await state.provisionAccount(payload);
+    if (err != null) return developer.ServiceExtensionResponse.error(400, err);
+    return developer.ServiceExtensionResponse.result('{"ok":true}');
   });
 }

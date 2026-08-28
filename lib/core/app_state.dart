@@ -2056,6 +2056,15 @@ class AppState extends ChangeNotifier {
 
   bool get hasNetworkKey => getNetworkKey() != null;
 
+  List<int>? get authorityPrivateForSign => _authorityPrivateB64;
+
+  Future<String?> networkKeyB64() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(kNetworkKeyPref);
+  }
+
+  Future<SharedPreferences> get prefsForTest => SharedPreferences.getInstance();
+
   /// HQ: generates once. Phones receive the public half via provisioning QR.
   /// Also ensures a per-ADMIN network key for full mesh encryption.
   Future<void> _ensureAuthorityKey() async {

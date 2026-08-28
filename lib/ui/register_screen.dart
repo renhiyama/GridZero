@@ -14,6 +14,7 @@ import '../app_scope.dart';
 import '../core/app_state.dart';
 import '../core/identity.dart';
 import '../core/ledger/ledger_store.dart';
+import '../core/ledger/officer_sign.dart';
 import '../core/mesh_packet.dart';
 import '../core/provision_packet.dart';
 import 'hud_theme.dart';
@@ -224,16 +225,27 @@ class _CreateAccountPanelState extends State<_CreateAccountPanel> {
     final passwordHash = sha256
         .convert(utf8.encode('gridzero:pw:$password'))
         .toString();
+    final authorityPub = await widget.app.authorityPubKey();
+    // Derive the citizen's signing pub and certify it with HQ authority so
+    // the QR is self-contained and the citizen's future chat/landmark sigs
+    // can be verified without a separate roster lookup.
+    final citizenKey = deriveOfficerKey(passwordHash);
+    final citizenPubB64 = base64Encode(citizenKey.$1);
+    final citizenCert = widget.app.certifyOfficerKey(name, citizenPubB64);
+    final netKeyB64 = await widget.app.networkKeyB64();
     final payload = encodeAccountProvision(
       purpose: ProvisionPurpose.citizen,
       username: name,
       passwordHash: passwordHash,
-      authorityPub: await widget.app.authorityPubKey(),
+      authorityPub: authorityPub,
+      certB64: citizenCert,
+      netKeyB64: netKeyB64,
       pinHash: pin.isEmpty
           ? null
           : sha256.convert(utf8.encode('gridzero:pin:$pin')).toString(),
       aadhaar: aadhaar,
       familyId: family?.toUpperCase(),
+      signer: (canonical) => base64Encode(signOfficerRecord(widget.app.authorityPrivateForSign!, canonical)),
     );
     // Record the issued account in HQ's local directory immediately: the
     // handoff QR may be lost, but the ledger of issued identities survives.
@@ -245,6 +257,10 @@ class _CreateAccountPanelState extends State<_CreateAccountPanel> {
       aadhaar: aadhaar,
       familyId: family?.toUpperCase(),
     );
+    // Stash the cert for this citizen so future re-issues use the same one.
+    final prefs = await widget.app.prefsForTest;
+    await prefs.setString('cert_sig_$name', citizenCert);
+    await prefs.setString('cert_sig_${name}_citizen', citizenCert);
     if (!mounted) return;
     if (error != null) return _fail(error);
     setState(() {

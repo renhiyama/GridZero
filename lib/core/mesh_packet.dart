@@ -237,6 +237,7 @@ class MeshPacket {
     this.revocation,
     this.chunk,
     this.targetNodeId = 0,
+    this.wasEncrypted = false,
   });
 
   final MeshPacketType type;
@@ -275,6 +276,11 @@ class MeshPacket {
 
   /// Altitude in cm above sea level, or null when unknown.
   final int? altitudeCm;
+
+  /// Whether this frame was decrypted with the current network key.
+  /// True for encrypted mesh (per-ADMIN private), false for plaintext
+  /// (anonymous or different network). Used for UI chips [ENC]/[UNENC].
+  final bool wasEncrypted;
 
   /// Altitude in metres, or null when unknown.
   double? get altitudeM => altitudeCm == null ? null : altitudeCm! / 100.0;
@@ -378,12 +384,14 @@ class MeshPacket {
     // the decrypted version — otherwise a plaintext frame would be garbled by
     // a spurious decrypt with the wrong key.
     Uint8List frame = raw;
+    bool wasEncrypted = false;
     final key = getNetworkKey();
     if (key != null && raw.length == meshPacketLength) {
       try {
         final maybe = decryptMeshFrame(Uint8List.fromList(raw), key);
         if (maybe[0] == meshMagic && maybe[16] == crc8(maybe.sublist(0, 16))) {
           frame = maybe;
+          wasEncrypted = true;
         }
       } catch (_) {}
     }
@@ -416,6 +424,7 @@ class MeshPacket {
       hopCount: frame[13] & 0x0f,
       flags: carriesCoords ? frame[17] : 0,
       altitudeCm: null,
+      wasEncrypted: wasEncrypted,
     );
     switch (type) {
       case MeshPacketType.identityAnnounce:
@@ -438,6 +447,7 @@ class MeshPacket {
           altitudeCm: null,
           identityUsername: String.fromCharCodes(buf.sublist(0, len)),
           identityRole: frame[12],
+          wasEncrypted: wasEncrypted,
         );
       case MeshPacketType.ledgerRecord:
         final code = frame[12];
@@ -463,6 +473,7 @@ class MeshPacket {
                 ? 1.0
                 : (((frame[17] >> 1) & 0x07) * 0.25).toDouble(),
           ),
+          wasEncrypted: wasEncrypted,
         );
       case MeshPacketType.revocationAlert:
         return MeshPacket(
@@ -481,6 +492,7 @@ class MeshPacket {
             reasonCode: frame[12],
             issuedAt: bd.getUint32(18, Endian.big),
           ),
+          wasEncrypted: wasEncrypted,
         );
       case MeshPacketType.chat:
       case MeshPacketType.announce:
@@ -508,6 +520,7 @@ class MeshPacket {
               frame[17].clamp(1, MeshDataChunk.chunkBytes),
             ),
           ),
+          wasEncrypted: wasEncrypted,
         );
       case MeshPacketType.respond:
         return MeshPacket(
@@ -522,6 +535,7 @@ class MeshPacket {
           flags: 0,
           altitudeCm: null,
           targetNodeId: bd.getUint16(4, Endian.big),
+          wasEncrypted: wasEncrypted,
         );
       case MeshPacketType.sosBeacon:
       case MeshPacketType.relayStatus:
@@ -540,6 +554,7 @@ class MeshPacket {
             _altUnknown => null,
             final int v => v,
           },
+          wasEncrypted: wasEncrypted,
         );
     }
   }

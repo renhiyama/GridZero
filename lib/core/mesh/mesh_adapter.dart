@@ -10,6 +10,7 @@ class MeshRxPacket {
 
   final MeshPacket packet;
   final int rssi;
+  bool get wasEncrypted => packet.wasEncrypted;
 }
 
 abstract class MeshAdapter {

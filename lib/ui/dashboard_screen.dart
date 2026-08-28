@@ -330,6 +330,7 @@ class _PeersPanel extends StatelessWidget {
             rssi: null,
             lastSeenEpoch: DateTime.now().millisecondsSinceEpoch,
             sos: app.sosActive,
+            isEncrypted: app.hasNetworkKey,
           ),
           if (all)
             const Padding(
@@ -344,6 +345,7 @@ class _PeersPanel extends StatelessWidget {
                 nodeId: n.nodeId,
                 username: n.username,
                 role: n.roleCode,
+                isEncrypted: n.lastWasEncrypted,
                 symbol: n.hasSos
                     ? packetSymbol(MeshPacketType.sosBeacon)
                     : n.lastType == MeshPacketType.sosBeacon
@@ -361,7 +363,7 @@ class _PeersPanel extends StatelessWidget {
     );
   }
 
-  Widget _peerRow(
+  Widget   _peerRow(
     AppPalette p, {
     required int nodeId,
     required String? username,
@@ -372,6 +374,7 @@ class _PeersPanel extends StatelessWidget {
     required bool sos,
     bool isSelf = false,
     bool showDebug = true,
+    bool? isEncrypted,
   }) {
     final age = DateTime.now().millisecondsSinceEpoch - lastSeenEpoch;
     final ageLabel = age < 60000
@@ -424,6 +427,26 @@ class _PeersPanel extends StatelessWidget {
               fontSize: 10,
             ),
           ),
+          if (isEncrypted != null) ...[
+            const SizedBox(width: 6),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+              decoration: BoxDecoration(
+                border: Border.all(color: isEncrypted ? p.primary : p.error, width: 0.8),
+                color: isEncrypted ? p.primary.withValues(alpha: 0.12) : p.error.withValues(alpha: 0.12),
+              ),
+              child: Text(
+                isEncrypted ? 'ENC' : 'UNENC',
+                style: TextStyle(
+                  color: isEncrypted ? p.primary : p.error,
+                  fontFamily: 'monospace',
+                  fontSize: 8,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 0.5,
+                ),
+              ),
+            ),
+          ],
           const SizedBox(width: 8),
           Text(
             symbol,

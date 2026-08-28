@@ -27,11 +27,13 @@ class MeshNodeState {
   /// enforces it so a dead node never shows a permanent SOS.
   int sosExpiryEpoch = 0;
   MeshPacketType lastType = MeshPacketType.relayStatus;
+  bool lastWasEncrypted = false;
 
   void updateFrom(MeshRxPacket rx) {
     final p = rx.packet;
     lastSeenEpoch = DateTime.now().millisecondsSinceEpoch;
     lastType = p.type;
+    lastWasEncrypted = p.wasEncrypted;
     // Identity and ledger frames reuse the coordinate bytes as payload, so
     // they must never clobber a node's known position.
     switch (p.type) {

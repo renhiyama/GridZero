@@ -2054,6 +2054,8 @@ class AppState extends ChangeNotifier {
     return hash.substring(0, 4);
   }
 
+  bool get hasNetworkKey => getNetworkKey() != null;
+
   /// HQ: generates once. Phones receive the public half via provisioning QR.
   /// Also ensures a per-ADMIN network key for full mesh encryption.
   Future<void> _ensureAuthorityKey() async {

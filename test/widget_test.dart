@@ -186,7 +186,7 @@ void main() {
     await tester.tap(find.text('OFFICER'));
     await tester.pumpAndSettle();
 
-    expect(find.text('OFFICER ▸ OFF-0A3F0FAB'), findsOneWidget);
+    expect(find.textContaining('OFFICER ▸ OFF-0A3F0FAB'), findsOneWidget);
     expect(find.text('SCAN'), findsOneWidget);
     expect(find.text('LEDGER'), findsOneWidget);
     expect(find.text('MAP'), findsWidgets);

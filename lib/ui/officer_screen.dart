@@ -60,7 +60,7 @@ class _OfficerScreenState extends State<OfficerScreen> {
                             color: p.primary.withValues(alpha: 0.12),
                           ),
                           child: Text(
-                            'OFFICER ▸ ${app.officerId}',
+                            'OFFICER ▸ ${app.officerId}${app.networkId == null ? '' : ' · ${app.networkId}'}',
                             style: TextStyle(
                               color: p.primary,
                               fontFamily: 'monospace',

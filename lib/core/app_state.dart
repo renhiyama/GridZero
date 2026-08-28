@@ -2633,6 +2633,8 @@ class AppState extends ChangeNotifier {
       ],
       'lastFaceEnrollAt': lastFaceEnrollAt?.toIso8601String(),
       'lastDataExchangeAt': lastDataExchangeAt?.toIso8601String(),
+      'networkKey': (await SharedPreferences.getInstance()).getString(kNetworkKeyPref) != null ? '${(await SharedPreferences.getInstance()).getString(kNetworkKeyPref)!.substring(0, 8)}...' : null,
+      'hasNetworkKey': getNetworkKey() != null,
       'chat': [
         for (final m in chatMessages)
           {'from': m.senderName, 'text': m.text, 'at': m.at.toIso8601String()},

@@ -1041,15 +1041,20 @@ class AppState extends ChangeNotifier {
     await _accelSub?.cancel();
     _accelSub = null;
     sosActive = false;
-    // Drop to STANDBY scanning: no session, so the radio just keeps a slow
-    // watch for anonymous SOS beacons instead of burning battery at full duty.
     final m = mesh;
     if (m != null) {
       unawaited(m.setRadioActive(false));
       unawaited(m.setRadioAlert(false));
+      // Clear mesh peer table so "nearby nodes" doesn't linger after logout.
+      m.clearNodes();
     }
     _knownPeerIds.clear();
     _heartbeatTick = 0;
+    // Wipe in-memory chat + landmarks so UI doesn't show stale data after
+    // logout; persisted copies are kept until deleteAllData (logout is not a
+    // factory reset, but the live view must be empty).
+    chatMessages.clear();
+    officialLandmarks.clear();
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_kSessionUserPref);
     loggedIn = false;

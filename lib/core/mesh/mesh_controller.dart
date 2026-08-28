@@ -595,6 +595,12 @@ class MeshController {
     }
   }
 
+  void clearNodes() {
+    _nodes.clear();
+    _approxDirty = true;
+    _nodeUpdates.add(Map.of(_nodes));
+  }
+
   /// Periodic sweep: drop peers silent for >2min (stale people lingering),
   /// and clear SOS beacons whose 90s re-broadcast lease has lapsed.
   void _sweep() {

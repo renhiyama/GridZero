@@ -9,6 +9,7 @@ import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter_compass/flutter_compass.dart';
 
 import '../app_scope.dart';
@@ -36,6 +37,8 @@ class _RadarScreenState extends State<RadarScreen>
   StreamSubscription<CompassEvent>? _compassSub;
   double? _heading;
   double? _smoothedHeading;
+  double? _targetHeading;
+  Ticker? _ticker;
 
   /// Shortest signed arc from [from] to [to] in degrees (-180..180). Naive
   /// subtraction breaks smoothing across the 359/0 wrap.
@@ -47,21 +50,34 @@ class _RadarScreenState extends State<RadarScreen>
   @override
   void initState() {
     super.initState();
-    // Compass needs a magnetometer; laptops return null and fall back to
-    // north-up mode. Raw magnetometer headings jitter by several degrees,
-    // so they pass through an exponential smoother before painting.
+    // 60fps ticker that lerps _heading toward _targetHeading. The underlying
+    // magnetometer (FlutterCompass) fires at ~15Hz on Android, so without
+    // interpolation the bezel stutters. The ticker runs at display refresh
+    // rate and eases with a higher factor (0.22) for snappy yet smooth motion.
+    _ticker = createTicker((elapsed) {
+      if (_targetHeading == null || _smoothedHeading == null) return;
+      final delta = _angleDelta(_smoothedHeading!, _targetHeading!);
+      if (delta.abs() < 0.05) return;
+      _smoothedHeading = _smoothedHeading! + delta * 0.22;
+      // Normalize to 0..360 for display
+      _smoothedHeading = (_smoothedHeading! % 360 + 360) % 360;
+      _heading = _smoothedHeading;
+      if (mounted) setState(() {});
+    });
+    _ticker!.start();
     if (defaultTargetPlatform == TargetPlatform.android ||
         defaultTargetPlatform == TargetPlatform.iOS) {
       _compassSub = FlutterCompass.events?.listen((e) {
         if (!mounted || e.heading == null) return;
-        final raw = e.heading!;
-        setState(() {
-          _heading = _smoothedHeading == null
-              ? raw
-              : _smoothedHeading! +
-                    _angleDelta(_smoothedHeading!, raw) * 0.18;
-        });
-        _smoothedHeading = _heading;
+        final raw = (e.heading! % 360 + 360) % 360;
+        if (_smoothedHeading == null) {
+          _smoothedHeading = raw;
+          _heading = raw;
+          _targetHeading = raw;
+          if (mounted) setState(() {});
+        } else {
+          _targetHeading = raw;
+        }
       });
     }
   }
@@ -70,6 +86,7 @@ class _RadarScreenState extends State<RadarScreen>
   void dispose() {
     _respondTimer?.cancel();
     _compassSub?.cancel();
+    _ticker?.dispose();
     _pulse.dispose();
     super.dispose();
   }

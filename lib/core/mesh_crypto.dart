@@ -44,8 +44,11 @@ Uint8List? getNetworkKey() => _currentNetworkKey;
 Uint8List encryptMeshFrame(Uint8List frame, Uint8List key) {
   if (key.length != kNetworkKeyBytes) return frame;
   if (frame.length != 22) return frame;
-  // Build 16B CTR IV: [senderId(2), seq(2), zeros(12)] — deterministic per frame,
-  // unique per (sender,seq) so CTR keystream never repeats for same key.
+  // Only encrypt the payload portion (bytes 4-13, 17, 18-21) which carries
+  // coords, triage, and the 11B chunk slices. Headers (MAGIC 0, TYPE 1,
+  // SENDER_ID 2-3, TTL_HOP 13, SEQ 14-15, CRC 16) stay plaintext for routing/
+  // dedup and for deriving the CTR nonce. This keeps 2-ADMIN isolation on
+  // content while preserving mesh plumbing.
   final bd = frame.buffer.asByteData();
   final senderId = bd.getUint16(2, Endian.big);
   final seq = bd.getUint16(14, Endian.big);
@@ -54,18 +57,19 @@ Uint8List encryptMeshFrame(Uint8List frame, Uint8List key) {
   iv[1] = senderId & 0xff;
   iv[2] = (seq >> 8) & 0xff;
   iv[3] = seq & 0xff;
-  // bytes 4..15 are counter blocks for CTR; we keep them zero and let CTR increment.
-  final ctr = SICStreamCipher(AESEngine());
+  final ctr = StreamCipher("AES/SIC");
   ctr.init(true, ParametersWithIV(KeyParameter(key), iv));
   final out = Uint8List.fromList(frame);
-  final block = Uint8List(21);
-  for (var i = 0; i < 21; i++) {
-    block[i] = frame[1 + i];
+  // Payload bytes that carry user content: 4-13 (10B), 17 (1B), 18-21 (4B) = 15B
+  const payloadIdx = [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 17, 18, 19, 20, 21];
+  final block = Uint8List(payloadIdx.length);
+  for (var i = 0; i < payloadIdx.length; i++) {
+    block[i] = frame[payloadIdx[i]];
   }
-  final cipher = Uint8List(21);
-  ctr.processBytes(block, 0, 21, cipher, 0);
-  for (var i = 0; i < 21; i++) {
-    out[1 + i] = cipher[i];
+  final cipher = Uint8List(payloadIdx.length);
+  ctr.processBytes(block, 0, payloadIdx.length, cipher, 0);
+  for (var i = 0; i < payloadIdx.length; i++) {
+    out[payloadIdx[i]] = cipher[i];
   }
   return out;
 }
@@ -83,7 +87,7 @@ Uint8List encryptMeshChunk(Uint8List chunk11, Uint8List key, int senderId, int s
   iv[2] = (seq >> 8) & 0xff;
   iv[3] = seq & 0xff;
   iv[4] = chunkIdx & 0xff;
-  final ctr = SICStreamCipher(AESEngine());
+  final ctr = StreamCipher("AES/SIC");
   ctr.init(true, ParametersWithIV(KeyParameter(key), iv));
   final out = Uint8List(chunk11.length);
   ctr.processBytes(chunk11, 0, chunk11.length, out, 0);

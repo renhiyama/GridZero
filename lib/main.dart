@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import 'app_scope.dart';
 import 'core/app_state.dart';
+import 'core/background_service.dart' as bg;
 import 'package:flutter/foundation.dart';
 import 'core/mesh/native_mesh.dart';
 import 'core/mesh/win_mesh_adapter.dart';
@@ -37,6 +38,15 @@ Future<void> main() async {
   // The mesh now runs from boot (anonymous), so notifications can subscribe
   // immediately and stay valid across login/logout cycles.
   await notifier.init();
+  // Keep mesh alive in background + exempt from Doze so SOS alerts fire
+  // even when the app is swiped away or the screen is off.
+  Future.microtask(() async {
+    try {
+      await bg.startMeshForegroundService();
+      final ignoring = await bg.isIgnoringBatteryOptimizations();
+      if (!ignoring) await bg.requestIgnoreBatteryOptimizations();
+    } catch (_) {}
+  });
   // Resume the last session account so a restart lands in the shell instead
   // of the login screen.
   await state.restoreSession();

@@ -2042,6 +2042,18 @@ class AppState extends ChangeNotifier {
   String? _authorityPublicB64;
   List<int>? _authorityPrivateB64;
 
+  /// 4-char alphanumeric network ID for the current ADMIN's private mesh.
+  /// Derived from the network key's hash so PQR (A) and XYZ (B) show different
+  /// tags like `LIVE MESH · A3F9` vs `A7C1`. Null → not provisioned yet.
+  String? get networkId {
+    final key = getNetworkKey();
+    final keyB64 = key == null ? null : base64Encode(key);
+    final src = keyB64 ?? _authorityPublicB64;
+    if (src == null) return null;
+    final hash = sha256.convert(utf8.encode(src)).toString().toUpperCase();
+    return hash.substring(0, 4);
+  }
+
   /// HQ: generates once. Phones receive the public half via provisioning QR.
   /// Also ensures a per-ADMIN network key for full mesh encryption.
   Future<void> _ensureAuthorityKey() async {

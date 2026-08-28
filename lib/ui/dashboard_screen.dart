@@ -76,7 +76,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     color: p.primary.withValues(alpha: 0.12),
                   ),
                   child: Text(
-                    'LIVE MESH',
+                    'LIVE MESH${app.networkId == null ? '' : ' · ${app.networkId}'}',
                     style: TextStyle(
                       color: p.primary,
                       fontFamily: 'monospace',

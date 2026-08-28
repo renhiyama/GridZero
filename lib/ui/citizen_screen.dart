@@ -117,7 +117,7 @@ class _Header extends StatelessWidget {
               color: p.primary.withValues(alpha: 0.12),
             ),
             child: Text(
-              app.showDebugInfo ? 'AADHAAR ▸ ${app.citizenId}' : 'CITIZEN',
+              '${app.showDebugInfo ? 'AADHAAR ▸ ${app.citizenId}' : 'CITIZEN'}${app.networkId == null ? '' : ' · ${app.networkId}'}',
               style: TextStyle(
                 color: p.primary,
                 fontFamily: 'monospace',

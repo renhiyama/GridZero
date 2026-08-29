@@ -437,13 +437,14 @@ class MeshController {
       _dedup.insert(packet.dedupKey);
       packets.add(packet);
     }
-    // Single-chunk chat (most messages are ~1 chunk: 11B) is the common
-    // loss case: a 400ms dwell is shorter than a 9s NOMINAL sleep, so a
-    // phone that is asleep when the chunk airs misses it entirely. Make it
-    // sticky for 12s so any scanner wakes into it, then revert to heartbeat.
-    if (packets.length == 1 && type == MeshPacketType.chat) {
+    // Single-chunk chat/announce (most short payloads are ~1 chunk: 11B) is
+    // the common loss case: a 400ms dwell is shorter than a 9s NOMINAL sleep,
+    // so a phone that is asleep when the chunk airs misses it entirely. Make
+    // it sticky for 12s so any scanner wakes into it, then revert to heartbeat.
+    if (packets.length == 1 &&
+        (type == MeshPacketType.chat || type == MeshPacketType.announce)) {
       await adapter.broadcast(packets.first, persistent: true);
-      // Keep the chat payload as the long-dwell slot for 12s so a 9s sleeper
+      // Keep the payload as the long-dwell slot for 12s so a 9s sleeper
       // is guaranteed one window, then restore the heartbeat announce.
       Future<void>.delayed(const Duration(seconds: 12), () async {
         try {
@@ -458,9 +459,9 @@ class MeshController {
       await adapter.broadcast(packets.first);
       return;
     }
-     final repeat = repeatOverride != 0
+    final repeat = repeatOverride != 0
         ? repeatOverride
-        : (type == MeshPacketType.chat ? 3 : 1);
+        : (type == MeshPacketType.chat || type == MeshPacketType.announce ? 3 : 1);
     for (var r = 0; r < repeat; r++) {
       for (var i = 0; i < packets.length; i++) {
         var waited = 0;
@@ -522,12 +523,6 @@ class MeshController {
   void _onRx(MeshRxPacket rx) {
     final p = rx.packet;
     framesSeen++;
-    // ignore: avoid_print
-    print('GridZero: _onRx ${p.type.name} from ${p.senderId} seq ${p.seq} chunk ${p.chunk?.index}/${p.chunk?.total} wasEnc ${p.wasEncrypted} rssi ${rx.rssi} ttl ${p.ttl}');
-    if (p.type == MeshPacketType.chat && p.senderId != nodeId) {
-      // ignore: avoid_print
-      print('GridZero: _onRx chat not loopback, will try reassemble');
-    }
     // Loopback: the local adapter hears its own advertisement on radios that
     // scan and advertise concurrently. Own frames must never become a peer: // this device is drawn from its own GPS/estimate state, not the mesh map.
     if (p.senderId == nodeId) return;
@@ -571,6 +566,9 @@ class MeshController {
 
     if (p.chunk != null &&
         (p.type == MeshPacketType.chat || p.type == MeshPacketType.announce)) {
+      // Boost scan on first chunk so the remaining 20 chunks of a landmark
+      // aren't lost while the receiver sleeps 4s (Bluez duty cycle).
+      if (p.chunk!.index == 0) adapter.boostScan();
       final msg = _reassembleChunks(p.senderId, p.type, p.chunk!, p.seq);
       if (msg != null) _dataMessages.add(msg);
     }

@@ -231,10 +231,9 @@ class BluezMeshAdapter implements MeshAdapter {
 
   void _scheduleRotation() {
     if (_rotateTimer != null) return;
-    _rotateTimer = Timer.periodic(const Duration(seconds: 2), (_) async {
+    void tick() async {
+      _rotateTimer = null;
       if (_rotateQueue.isEmpty) {
-        _rotateTimer?.cancel();
-        _rotateTimer = null;
         final sticky = _persistentPayload;
         if (sticky != null && !listEquals(advertisingPayload, sticky)) {
           await _swapPayload(sticky);
@@ -242,11 +241,15 @@ class BluezMeshAdapter implements MeshAdapter {
         return;
       }
       final next = _rotateQueue.removeAt(0);
-      await _swapPayload(next);
-    });
+      final ok = await _swapPayload(next);
+      // Fast drain for burst (400ms) so 20-chunk landmark drains in ~8s not 40s.
+      _rotateTimer = Timer(Duration(milliseconds: ok ? 400 : 1000), tick);
+    }
+
+    _rotateTimer = Timer(Duration.zero, tick);
   }
 
-  Future<void> _swapPayload(Uint8List payload) async {
+  Future<bool> _swapPayload(Uint8List payload) async {
     advertisingPayload = payload;
     // Unregister BEFORE clearing state: if this throws we still track the
     // handle in _liveRegistrations and clean it up on the next attempt: // clearing first is what leaked BlueZ advertisement slots.
@@ -266,7 +269,12 @@ class BluezMeshAdapter implements MeshAdapter {
       _advert = null;
       _advertising = false;
     }
-    await _startAdvertising();
+    try {
+      await _startAdvertising();
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   @override
@@ -275,7 +283,8 @@ class BluezMeshAdapter implements MeshAdapter {
     if (persistent) {
       _persistentPayload = payload;
       if (listEquals(advertisingPayload, payload)) return;
-      return _swapPayload(payload);
+      await _swapPayload(payload);
+      return;
     }
     if (listEquals(advertisingPayload, payload)) return;
     if (_rotateQueue.isNotEmpty && listEquals(_rotateQueue.last, payload)) {

@@ -2428,6 +2428,7 @@ class AppState extends ChangeNotifier {
       expiresAt: expiry,
       signedBlobB64: blobB64,
     ));
+    mesh?.adapter.boostScan();
     await mesh?.broadcastDataPayload(MeshPacketType.announce, blob);
     // Keep our own landmark: displayed immediately and re-broadcast after a
     // restart while it is still valid.

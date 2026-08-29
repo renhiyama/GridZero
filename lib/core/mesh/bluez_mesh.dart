@@ -51,11 +51,11 @@ class BluezMeshAdapter implements MeshAdapter {
   Duration _jittered(Duration base) =>
       base + Duration(milliseconds: _rand.nextInt(900));
 
-  @override
+  DateTime? _burstUntil;
+
   @override
   void boostScan() {
-    // Linux scans continuously (tier CONTINUOUS, 0ms sleep) so a boost is
-    // unnecessary; restart the window to force a propertyChanged refresh.
+    _burstUntil = DateTime.now().add(const Duration(seconds: 15));
     _scanWindow();
   }
 
@@ -141,6 +141,13 @@ class BluezMeshAdapter implements MeshAdapter {
   }
 
   Future<void> _sleepWindow() async {
+    // If boosted (e.g. first chunk of 21-chunk landmark just arrived), stay
+    // scanning continuously so the remaining 20 chunks aren't lost in 4s sleep.
+    if (_burstUntil != null && DateTime.now().isBefore(_burstUntil!)) {
+      _dutyCycleTimer = Timer(const Duration(milliseconds: 400), _scanWindow);
+      return;
+    }
+    _burstUntil = null;
     _scanOn = false;
     _prunePeers();
     try {

@@ -2761,6 +2761,8 @@ class AppState extends ChangeNotifier {
       ],
       'lastLandmarkDebug': lastLandmarkDebug,
       'lastChatDebug': lastChatDebug,
+      'framesSeen': m?.framesSeen,
+      'chunkDebug': m?.chunkDebug,
       'lastChatSentAt': _lastChatSentAt?.toIso8601String(),
       'chatCooldownLeft': _lastChatSentAt == null
           ? 0

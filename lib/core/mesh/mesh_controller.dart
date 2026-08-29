@@ -166,6 +166,9 @@ class MeshController {
   /// Partial multi-frame payloads keyed by (senderId, type, baseSeq, total).
   final Map<String, _ChunkReasm> _chunkReasm = {};
   final Map<String, int> _chunkReasmAt = {};
+  int get chunkPendingCount => _chunkReasm.length;
+  String get chunkDebug =>
+      _chunkReasm.entries.map((e) => '${e.key}:${e.value.slots.length}/${e.value.total}').join(',');
 
   /// Node ids of peers who answered THIS device's SOS (we are the target).
   final Set<int> _responders = {};
@@ -523,6 +526,10 @@ class MeshController {
   void _onRx(MeshRxPacket rx) {
     final p = rx.packet;
     framesSeen++;
+    if (p.type == MeshPacketType.announce) {
+      // ignore: avoid_print
+      print('GridZero: announce chunk ${p.chunk?.index}/${p.chunk?.total} from ${p.senderId} wasEnc ${p.wasEncrypted}');
+    }
     // Loopback: the local adapter hears its own advertisement on radios that
     // scan and advertise concurrently. Own frames must never become a peer: // this device is drawn from its own GPS/estimate state, not the mesh map.
     if (p.senderId == nodeId) return;

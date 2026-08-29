@@ -6,6 +6,8 @@ import 'package:flutter/material.dart';
 import 'app_scope.dart';
 import 'core/app_state.dart';
 import 'core/background_service.dart' as bg;
+// ignore: unused_import
+import 'core/chat_codec.dart';
 import 'package:flutter/foundation.dart';
 import 'core/mesh/native_mesh.dart';
 import 'core/mesh/win_mesh_adapter.dart';
@@ -148,20 +150,32 @@ void registerSyncDebugExtension(AppState state) {
     final password = parameters['password'] ?? 'pass1234';
     final role = parameters['role'] == 'officer' ? Role.officer : Role.citizen;
     final err = await state.register(username, password, role);
-    if (err != null) return developer.ServiceExtensionResponse.error(400, err);
+    if (err != null) return developer.ServiceExtensionResponse.error(-32000, err);
     return developer.ServiceExtensionResponse.result('{"ok":true,"user":"$username"}');
   });
   developer.registerExtension('ext.gridzero.login', (method, parameters) async {
     final username = parameters['username'] ?? '';
     final password = parameters['password'] ?? 'pass1234';
     final err = await state.login(username, password);
-    if (err != null) return developer.ServiceExtensionResponse.error(400, err);
+    if (err != null) return developer.ServiceExtensionResponse.error(-32000, err);
     return developer.ServiceExtensionResponse.result('{"ok":true}');
   });
   developer.registerExtension('ext.gridzero.chat', (method, parameters) async {
     final text = parameters['text'] ?? '';
     final err = await state.sendBroadcastMessage(text);
-    if (err != null) return developer.ServiceExtensionResponse.error(400, err);
+    if (err != null) return developer.ServiceExtensionResponse.error(-32000, err);
+    return developer.ServiceExtensionResponse.result('{"ok":true}');
+  });
+  developer.registerExtension('ext.gridzero.promote', (method, parameters) async {
+    final username = parameters['username'] ?? '';
+    final err = await state.promoteToOfficer(username);
+    if (err != null) return developer.ServiceExtensionResponse.error(-32000, err);
+    return developer.ServiceExtensionResponse.result('{"ok":true}');
+  });
+  developer.registerExtension('ext.gridzero.chatUnsigned', (method, parameters) async {
+    final text = parameters['text'] ?? '';
+    final err = await state.sendUnsignedChat(text);
+    if (err != null) return developer.ServiceExtensionResponse.error(-32000, err);
     return developer.ServiceExtensionResponse.result('{"ok":true}');
   });
   developer.registerExtension('ext.gridzero.landmark', (method, parameters) async {
@@ -169,19 +183,30 @@ void registerSyncDebugExtension(AppState state) {
     final lat = double.tryParse(parameters['lat'] ?? '20.5937') ?? 20.5937;
     final lon = double.tryParse(parameters['lon'] ?? '78.9629') ?? 78.9629;
     final err = await state.postOfficialLandmark(label: label, typeCode: 0, latitude: lat, longitude: lon, validFor: const Duration(hours: 24));
-    if (err != null) return developer.ServiceExtensionResponse.error(400, err);
+    if (err != null) return developer.ServiceExtensionResponse.error(-32000, err);
     return developer.ServiceExtensionResponse.result('{"ok":true}');
   });
   developer.registerExtension('ext.gridzero.accountPayload', (method, parameters) async {
     final username = parameters['username'] ?? '';
     final payload = await state.accountProvisionPayload(username);
-    if (payload == null) return developer.ServiceExtensionResponse.error(404, 'no such account');
+    if (payload == null) return developer.ServiceExtensionResponse.error(-32000, 'no such account');
     return developer.ServiceExtensionResponse.result(jsonEncode({'payload': payload}));
   });
   developer.registerExtension('ext.gridzero.provision', (method, parameters) async {
     final payload = parameters['payload'] ?? '';
     final err = await state.provisionAccount(payload);
-    if (err != null) return developer.ServiceExtensionResponse.error(400, err);
+    if (err != null) return developer.ServiceExtensionResponse.error(-32000, err);
     return developer.ServiceExtensionResponse.result('{"ok":true}');
+  });
+  developer.registerExtension('ext.gridzero.migrateOfficerKeys', (method, parameters) async {
+    final accounts = await state.accounts();
+    var fixed = 0;
+    for (final acc in accounts.where((a) => a.role == Role.officer && a.officerId != null)) {
+      final before = await state.ledger.officerKey(acc.officerId!);
+      await state.enlistOfficerForTest(acc.username);
+      final after = await state.ledger.officerKey(acc.officerId!);
+      if (before == null || base64Encode(before.$1) != base64Encode(after!.$1)) fixed++;
+    }
+    return developer.ServiceExtensionResponse.result('{"fixed":$fixed}');
   });
 }

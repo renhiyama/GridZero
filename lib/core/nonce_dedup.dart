@@ -7,7 +7,7 @@ library;
 import 'dart:collection';
 
 class NonceDeduplicator {
-  NonceDeduplicator({this.capacity = 500});
+  NonceDeduplicator({this.capacity = 2048});
 
   final int capacity;
   final LinkedHashMap<int, bool> _seen = LinkedHashMap();

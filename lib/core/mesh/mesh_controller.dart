@@ -163,8 +163,9 @@ class MeshController {
   final _dataMessages = StreamController<DataMessageRx>.broadcast();
   Timer? _sweepTimer;
 
-  /// Partial multi-frame payloads keyed by (senderId, type).
+  /// Partial multi-frame payloads keyed by (senderId, type, baseSeq, total).
   final Map<String, _ChunkReasm> _chunkReasm = {};
+  final Map<String, int> _chunkReasmAt = {};
 
   /// Node ids of peers who answered THIS device's SOS (we are the target).
   final Set<int> _responders = {};
@@ -190,23 +191,28 @@ class MeshController {
   Stream<DataMessageRx> get dataMessages => _dataMessages.stream;
 
   /// Collects one chunk; emits the completed blob when all slots arrive.
+  /// Key includes baseSeq (seq - index) so two concurrent payloads from same
+  /// sender with different totals (e.g. a 19-chunk signed + a 2-chunk unsigned
+  /// sent 6s apart) don't clobber each other — the old total-mismatch clear
+  /// would wipe the first before it completed.
   DataMessageRx? _reassembleChunks(
     int senderId,
     MeshPacketType type,
     MeshDataChunk chunk,
+    int seq,
   ) {
     if (chunk.total < 1 || chunk.total > 40 || chunk.index >= chunk.total) {
       return null;
     }
-    final key = '$senderId/${type.value}';
+    final baseSeq = (seq - chunk.index) & 0xffff;
+    final key = '$senderId/${type.value}/$baseSeq/${chunk.total}';
     final state = _chunkReasm.putIfAbsent(key, _ChunkReasm.new);
-    if (state.total != chunk.total) {
-      state.total = chunk.total;
-      state.slots.clear();
-    }
+    _chunkReasmAt[key] = DateTime.now().millisecondsSinceEpoch;
+    if (state.total == -1) state.total = chunk.total;
     state.slots[chunk.index] = chunk.data;
     if (state.slots.length < state.total) return null;
     _chunkReasm.remove(key);
+    _chunkReasmAt.remove(key);
     final blob = BytesBuilder();
     for (var i = 0; i < state.total; i++) {
       blob.add(state.slots[i]!);
@@ -452,7 +458,7 @@ class MeshController {
       await adapter.broadcast(packets.first);
       return;
     }
-    final repeat = repeatOverride != 0
+     final repeat = repeatOverride != 0
         ? repeatOverride
         : (type == MeshPacketType.chat ? 3 : 1);
     for (var r = 0; r < repeat; r++) {
@@ -467,12 +473,11 @@ class MeshController {
         }
         await adapter.broadcast(packets[i]);
         if (i < packets.length - 1) {
-          await Future<void>.delayed(const Duration(milliseconds: 500));
+          await Future<void>.delayed(const Duration(milliseconds: 800));
         }
       }
       if (r < repeat - 1) {
-        // Let the scanner breathe and the queue drain before the next copy.
-        await Future<void>.delayed(const Duration(milliseconds: 800));
+        await Future<void>.delayed(const Duration(milliseconds: 1500));
       }
     }
   }
@@ -517,6 +522,12 @@ class MeshController {
   void _onRx(MeshRxPacket rx) {
     final p = rx.packet;
     framesSeen++;
+    // ignore: avoid_print
+    print('GridZero: _onRx ${p.type.name} from ${p.senderId} seq ${p.seq} chunk ${p.chunk?.index}/${p.chunk?.total} wasEnc ${p.wasEncrypted} rssi ${rx.rssi} ttl ${p.ttl}');
+    if (p.type == MeshPacketType.chat && p.senderId != nodeId) {
+      // ignore: avoid_print
+      print('GridZero: _onRx chat not loopback, will try reassemble');
+    }
     // Loopback: the local adapter hears its own advertisement on radios that
     // scan and advertise concurrently. Own frames must never become a peer: // this device is drawn from its own GPS/estimate state, not the mesh map.
     if (p.senderId == nodeId) return;
@@ -560,7 +571,7 @@ class MeshController {
 
     if (p.chunk != null &&
         (p.type == MeshPacketType.chat || p.type == MeshPacketType.announce)) {
-      final msg = _reassembleChunks(p.senderId, p.type, p.chunk!);
+      final msg = _reassembleChunks(p.senderId, p.type, p.chunk!, p.seq);
       if (msg != null) _dataMessages.add(msg);
     }
 
@@ -628,5 +639,14 @@ class MeshController {
       _approxDirty = true;
       _nodeUpdates.add(Map.of(_nodes));
     }
+    // Expire incomplete chunk reassemblies after 30s
+    final chunkCutoff = DateTime.now().millisecondsSinceEpoch - 30000;
+    _chunkReasmAt.removeWhere((k, at) {
+      if (at < chunkCutoff) {
+        _chunkReasm.remove(k);
+        return true;
+      }
+      return false;
+    });
   }
 }

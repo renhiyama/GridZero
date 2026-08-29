@@ -574,7 +574,22 @@ class AppState extends ChangeNotifier {
     }
     if (role == Role.officer) {
       _officerId = accounts[name]!.officerId;
-      await _enlistOfficerAccount(accounts[name]!, registeredBy: 'OFF-PROVISION');
+      // If the QR already carries a HQ-certified pub (citizen→officer promotion
+      // or fresh officer), store that cert verbatim instead of re-generating a
+      // random key. The officer's signing key is deterministic from the hash,
+      // so both HQ and this device derive the same pub.
+      if (acc.certB64 != null) {
+        final derived = deriveOfficerKey(acc.passwordHash);
+        await ledger.saveOfficerKey(_officerId!, derived.$1, derived.$2);
+        final prefs2 = await SharedPreferences.getInstance();
+        await prefs2.setString('cert_${_officerId}_pub', base64Encode(derived.$1));
+        await prefs2.setString('cert_${_officerId}_sig', acc.certB64!);
+        await prefs2.setString('cert_sig_${_officerId}', acc.certB64!);
+        await prefs2.setString('cert_sig_${name}', acc.certB64!);
+        await ledger.upsertOfficer(OfficerRecord(officerId: _officerId!, publicKey: base64Encode(derived.$1), enlistedAt: DateTime.now().millisecondsSinceEpoch ~/ 1000, registeredBy: 'OFF-PROVISION'));
+      } else {
+        await _enlistOfficerAccount(accounts[name]!, registeredBy: 'OFF-PROVISION');
+      }
     }
     // _startSession always succeeds; the returned error slot is reserved.
     await _startSession(username: name, role: role);
@@ -700,10 +715,30 @@ class AppState extends ChangeNotifier {
     final id = account.officerId;
     if (id == null) return;
     var key = await ledger.officerKey(id);
+    // Prefer deterministic key from the account's password hash so HQ and the
+    // officer's device share the same key without ever transporting the private
+    // half. This is what provisionAccount and accountPayload also use.
+    final wantsDeterministic = account.hash.length == 64;
     if (key == null) {
-      final fresh = generateOfficerKey();
-      await ledger.saveOfficerKey(id, fresh.$1, fresh.$2);
-      key = fresh;
+      if (wantsDeterministic) {
+        final derived = deriveOfficerKey(account.hash);
+        await ledger.saveOfficerKey(id, derived.$1, derived.$2);
+        key = derived;
+      } else {
+        final fresh = generateOfficerKey();
+        await ledger.saveOfficerKey(id, fresh.$1, fresh.$2);
+        key = fresh;
+      }
+    } else if (wantsDeterministic) {
+      // Migrate old random keys (from before the fix) to the deterministic
+      // one so HQ and the officer's phone agree on the same pub for GZCERT.
+      final derived = deriveOfficerKey(account.hash);
+      final existingPubB64 = base64Encode(key.$1);
+      final derivedPubB64 = base64Encode(derived.$1);
+      if (existingPubB64 != derivedPubB64) {
+        await ledger.saveOfficerKey(id, derived.$1, derived.$2);
+        key = derived;
+      }
     }
     // HQ certifies the officer's public key with the authority key: every
     // device can then verify that officer's signatures with only the single
@@ -721,6 +756,14 @@ class AppState extends ChangeNotifier {
         registeredBy: registeredBy,
       ),
     );
+  }
+
+  /// Test helper: re-enlist an officer to migrate a random key to deterministic.
+  Future<void> enlistOfficerForTest(String username) async {
+    final acc = _readAccounts(await SharedPreferences.getInstance())[username.toUpperCase()];
+    if (acc != null && acc.officerId != null) {
+      await _enlistOfficerAccount(acc, registeredBy: 'MIGRATE');
+    }
   }
 
   /// Every account this device knows about (the HQ directory backing the
@@ -1833,6 +1876,7 @@ class AppState extends ChangeNotifier {
   /// Latest broadcast messages, newest last. Persisted to prefs so the
   /// board survives restarts; trimmed at [kChatHistoryMax].
   final List<MeshChatMessage> chatMessages = [];
+  String? lastChatDebug;
 
   Future<void> _persistChat() async {
     final prefs = await SharedPreferences.getInstance();
@@ -1888,9 +1932,13 @@ class AppState extends ChangeNotifier {
             final cert = bytes.sublist(uLenPos + 1 + uLen + 65, uLenPos + 1 + uLen + 65 + 64);
             final sig = bytes.sublist(uLenPos + 1 + uLen + 65 + 64);
             final rootPub = await authorityPubKey();
+            lastChatDebug = 'signed $usernameFromBlob wire $wireLen cert ${cert.length} sig ${sig.length} root ${rootPub?.substring(0, 8)}';
+            debugPrint('GridZero: chat signed blob from $usernameFromBlob wireLen $wireLen cert ${cert.length} sig ${sig.length} root ${rootPub?.substring(0, 8)}');
             if (rootPub != null) {
               final pubB64 = base64Encode(pub);
               final certOk = verifyOfficerRecord(base64Decode(rootPub), 'GZCERT|$usernameFromBlob|$pubB64', Uint8List.fromList(cert));
+              lastChatDebug = 'certOk $certOk for $usernameFromBlob';
+              debugPrint('GridZero: chat certOk $certOk for $usernameFromBlob');
               if (certOk) {
                 final canonical = 'GZCHAT|$usernameFromBlob|${base64Encode(wire)}';
                 final sigOk = verifyOfficerRecord(pub, canonical, Uint8List.fromList(sig));
@@ -1916,8 +1964,10 @@ class AppState extends ChangeNotifier {
             // For transition, old unsigned blobs will fall through to the
             // unsigned path below instead of being dropped here.
             // If we reach here, the blob looked signed but was invalid, so drop.
+            debugPrint('GridZero: chat signed blob invalid for $usernameFromBlob, dropping');
             return;
-          } catch (_) {
+          } catch (e) {
+            debugPrint('GridZero: chat signed parse error $e');
             // Not a valid signed blob, fall through to unsigned handling.
           }
         }
@@ -1925,6 +1975,8 @@ class AppState extends ChangeNotifier {
     }
     // Unsigned / legacy path: best-effort decode, mark as unverified in UI
     // (still show for now to avoid breaking old devices during rollout).
+    lastChatDebug = 'unsigned len ${bytes.length} first ${bytes.isNotEmpty ? bytes[0] : -1}';
+    debugPrint('GridZero: chat unsigned fallback len ${bytes.length} first ${bytes.isNotEmpty ? bytes[0] : -1}');
     text = decodeChatWire(bytes);
     // If decodeChatWire returned empty (e.g., flagged but not signed), try
     // raw utf8 as last resort for very old devices that sent without flag.
@@ -1970,13 +2022,16 @@ class AppState extends ChangeNotifier {
     }
     // Try to wrap as signed chat: [wireLen2][wire][pub65][cert64][sig64]
     // where sig = sign(priv, GZCHAT|username|base64(wire)) and cert is HQ's
-    // GZCERT for this account's pub. If we have no cert (old account before
-    // the fix) we fall back to unsigned wire for backward compat.
+    // GZCERT for this account's pub. Citizens are unsigned for reliability
+    // (1 chunk vs 19 chunks signed: 204B overhead makes 2-char HI need 19
+    // BLE frames and always loses). Network key already isolates per-ADMIN
+    // private mesh, so only officers need signed chat for spam blocking.
+    // If we have no cert (old account before the fix) we fall back to unsigned.
     Uint8List blob = wire;
     try {
       final prefs = await SharedPreferences.getInstance();
       final acc = _readAccounts(prefs)[username];
-      if (acc != null) {
+      if (acc != null && acc.role == Role.officer) {
         final idForCert = acc.officerId ?? acc.username;
         final certB64 = prefs.getString('cert_sig_$idForCert') ?? prefs.getString('cert_sig_${acc.username}');
         if (certB64 != null) {
@@ -2026,6 +2081,29 @@ class AppState extends ChangeNotifier {
       text: trimmed,
       at: DateTime.now(),
     ));
+    while (chatMessages.length > kChatHistoryMax) {
+      chatMessages.removeAt(0);
+    }
+    unawaited(_persistChat());
+    notifyListeners();
+    return null;
+  }
+
+  /// Unsigned chat for mesh reliability testing (bypasses GZCHAT signing).
+  Future<String?> sendUnsignedChat(String text) async {
+    final trimmed = text.trim();
+    if (trimmed.isEmpty) return 'message is empty';
+    final wire = encodeChatWire(trimmed);
+    if (wire == null) return 'message too long';
+    final last = _lastChatSentAt;
+    if (last != null && DateTime.now().difference(last).inSeconds < kChatCooldownS) {
+      return 'wait ${kChatCooldownS - DateTime.now().difference(last).inSeconds}s';
+    }
+    final m = mesh;
+    if (m == null) return 'mesh radio not ready';
+    _lastChatSentAt = DateTime.now();
+    unawaited(m.broadcastDataPayload(MeshPacketType.chat, wire));
+    chatMessages.add(MeshChatMessage(senderNodeId: m.nodeId, senderName: username, text: trimmed, at: DateTime.now()));
     while (chatMessages.length > kChatHistoryMax) {
       chatMessages.removeAt(0);
     }
@@ -2182,6 +2260,7 @@ class AppState extends ChangeNotifier {
     cursor += 1;
     if (idLen == 0 ||
         cursor + idLen + pubLen + certLen + sigLen > rx.bytes.length) {
+      lastLandmarkDebug = 'parse fail idLen $idLen';
       return;
     }
     final officerId = utf8.decode(
@@ -2199,13 +2278,18 @@ class AppState extends ChangeNotifier {
     final pubB64 = base64Encode(officerPub);
     if (!_verifySig(base64Decode(rootPub), 'GZCERT|$officerId|$pubB64',
         certificate)) {
+      lastLandmarkDebug = 'cert fail for $officerId $label';
       return;
     }
     // Chain 2: that certified key signed the content.
     final canonical =
         'GZANN1|${lat.toStringAsFixed(7)}|${lon.toStringAsFixed(7)}|'
         '$typeCode|$expiry|$label';
-    if (!_verifySig(officerPub, canonical, signature)) return;
+    if (!_verifySig(officerPub, canonical, signature)) {
+      lastLandmarkDebug = 'sig fail for $label $canonical';
+      return;
+    }
+    lastLandmarkDebug = 'verified $label from $officerId';
 
     final blobB64 = base64Encode(rx.bytes);
     final record = LandmarkRecord(
@@ -2262,6 +2346,8 @@ class AppState extends ChangeNotifier {
       return false;
     }
   }
+
+  String? lastLandmarkDebug;
 
   /// HQ/officer side: sign and broadcast an official landmark.
   Future<String?> postOfficialLandmark({
@@ -2672,6 +2758,8 @@ class AppState extends ChangeNotifier {
             'exp': l.expiresAt.toIso8601String(),
           },
       ],
+      'lastLandmarkDebug': lastLandmarkDebug,
+      'lastChatDebug': lastChatDebug,
       'lastChatSentAt': _lastChatSentAt?.toIso8601String(),
       'chatCooldownLeft': _lastChatSentAt == null
           ? 0

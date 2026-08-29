@@ -584,8 +584,8 @@ class AppState extends ChangeNotifier {
         final prefs2 = await SharedPreferences.getInstance();
         await prefs2.setString('cert_${_officerId}_pub', base64Encode(derived.$1));
         await prefs2.setString('cert_${_officerId}_sig', acc.certB64!);
-        await prefs2.setString('cert_sig_${_officerId}', acc.certB64!);
-        await prefs2.setString('cert_sig_${name}', acc.certB64!);
+        await prefs2.setString('cert_sig_$_officerId', acc.certB64!);
+        await prefs2.setString('cert_sig_$name', acc.certB64!);
         await ledger.upsertOfficer(OfficerRecord(officerId: _officerId!, publicKey: base64Encode(derived.$1), enlistedAt: DateTime.now().millisecondsSinceEpoch ~/ 1000, registeredBy: 'OFF-PROVISION'));
       } else {
         await _enlistOfficerAccount(accounts[name]!, registeredBy: 'OFF-PROVISION');
